@@ -184,6 +184,7 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 
 	forceStorageClass := ""
 	var spec *corev1.PersistentVolumeClaimSpec
+	volumeNameOverride := ""
 
 	switch ds.Spec.Source.Type {
 	case datasetv1alpha1.DatasetTypeReference:
@@ -379,6 +380,7 @@ spec:
 		}
 		// 标记 ds.Status.LastSucceedRound = ds.Spec.DataSyncRound
 		ds.Status.LastSucceedRound = ds.Spec.DataSyncRound
+		volumeNameOverride = pvTemp.Name
 	default:
 		// 其他类型先不做特殊逻辑
 	}
@@ -433,6 +435,9 @@ spec:
 			// nfs 强制使用 nfs storageclass
 			spec.StorageClassName = lo.ToPtr(forceStorageClass)
 		}
+	}
+	if volumeNameOverride != "" {
+		spec.VolumeName = volumeNameOverride
 	}
 
 	if k8serrors.IsNotFound(err) {
