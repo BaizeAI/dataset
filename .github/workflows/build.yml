@@ -26,7 +26,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: |
             ghcr.io/${{ github.repository_owner }}/dataset-controller
@@ -45,7 +45,7 @@ jobs:
 
       - name: Docker meta
         id: meta_loader
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: |
             ghcr.io/${{ github.repository_owner }}/dataset-data-loader
