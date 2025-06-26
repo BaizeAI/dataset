@@ -12,10 +12,10 @@ require (
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/crypto v0.39.0
 	gopkg.in/yaml.v3 v3.0.1
-	k8s.io/api v0.31.3
-	k8s.io/apimachinery v0.31.3
-	k8s.io/client-go v0.31.0
-	k8s.io/code-generator v0.31.3
+	k8s.io/api v0.33.2
+	k8s.io/apimachinery v0.33.2
+	k8s.io/client-go v0.33.2
+	k8s.io/code-generator v0.33.2
 	sigs.k8s.io/controller-runtime v0.19.2
 	sigs.k8s.io/yaml v1.5.0
 )
