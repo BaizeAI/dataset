@@ -34,7 +34,7 @@ jobs:
             ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
 
       - name: Build Manager
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -53,7 +53,7 @@ jobs:
             ${{ github.ref == 'refs/heads/main' && 'latest' || github.ref_name }}
 
       - name: Build Data Loader
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
