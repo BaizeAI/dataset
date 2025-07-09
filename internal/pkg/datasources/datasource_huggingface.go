@@ -42,12 +42,13 @@ func NewHuggingFaceLoader(datasourceOptions map[string]string, options Options, 
 }
 
 type HuggingFaceLoaderOptions struct {
-	Revision string `json:"revision"`
-	RepoType string `json:"repoType"`
-	Endpoint string `json:"endpoint"`
-	Offline  bool   `json:"offline"`
-	Include  string `json:"include"`
-	Exclude  string `json:"exclude"`
+	Revision       string `json:"revision"`
+	RepoType       string `json:"repoType"`
+	Endpoint       string `json:"endpoint"`
+	Offline        bool   `json:"offline"`
+	Include        string `json:"include"`
+	Exclude        string `json:"exclude"`
+	BandwidthLimit string `json:"bandwidthLimit"`
 
 	token string
 }
@@ -212,6 +213,13 @@ func (d *HuggingFaceLoader) Sync(fromURI string, toPath string) error {
 	}
 
 	cmd := exec.Command("huggingface-cli", args...)
+	
+	// Apply bandwidth limiting if specified
+	cmd, err = WrapCommandWithBandwidthLimit(cmd, d.huggingFaceOptions.BandwidthLimit)
+	if err != nil {
+		return fmt.Errorf("failed to wrap huggingface-cli command with bandwidth limit: %w", err)
+	}
+	
 	cmd.Dir = d.Options.Root
 
 	logger = logger.WithField("command", cmd.String())

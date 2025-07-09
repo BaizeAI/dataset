@@ -56,3 +56,23 @@ func TestModelScopeLoader(t *testing.T) {
 	assert.Equal(t, string(bbs[0]), "login --token test-token\n")
 	assert.Equal(t, string(bbs[1]), strings.Join([]string{"download", "ns/model", "--local_dir", modelScopeDir}, " ")+"\n")
 }
+
+func TestModelScopeLoaderWithBandwidthLimit(t *testing.T) {
+	loader, err := NewModelScopeLoader(map[string]string{
+		"bandwidthLimit": "2M",
+	}, Options{
+		Type: "",
+		URI:  "modelscope://ns/model",
+		Path: "",
+		Mode: 0,
+		UID:  0,
+		GID:  0,
+		Root: "",
+	}, Secrets{
+		Token: "test-token",
+	})
+	assert.NoError(t, err)
+	
+	// Verify that the bandwidth limit is stored correctly
+	assert.Equal(t, "2M", loader.modelScopeOptions.BandwidthLimit)
+}

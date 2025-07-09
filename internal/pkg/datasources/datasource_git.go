@@ -49,10 +49,11 @@ func NewGitLoader(datasourceOption map[string]string, options Options, secrets S
 }
 
 type GitLoaderOptions struct {
-	Branch     string `json:"branch"`
-	Commit     string `json:"commit"`
-	Depth      string `json:"depth"`
-	Submodules string `json:"submodules"`
+	Branch        string `json:"branch"`
+	Commit        string `json:"commit"`
+	Depth         string `json:"depth"`
+	Submodules    string `json:"submodules"`
+	BandwidthLimit string `json:"bandwidthLimit"`
 
 	depth                   int64
 	username                string
@@ -429,6 +430,13 @@ func (d *GitLoader) clone(logger *logrus.Entry, alteredFromURI string, cloneToPa
 
 	args = append(args, "-v")
 	cmd := exec.Command("git", args...)
+	
+	// Apply bandwidth limiting if specified
+	cmd, err := WrapCommandWithBandwidthLimit(cmd, d.gitOptions.BandwidthLimit)
+	if err != nil {
+		return fmt.Errorf("failed to wrap git clone command with bandwidth limit: %w", err)
+	}
+	
 	cmd.Dir = d.Options.Root
 	cmd.Env = os.Environ()
 	if d.gitOptions.sshPrivateKey != "" {
@@ -494,6 +502,13 @@ func (d *GitLoader) pull(logger *logrus.Entry, alteredFromURI string, pullForPat
 
 	args = append(args, "-v")
 	cmd := exec.Command("git", args...)
+	
+	// Apply bandwidth limiting if specified
+	cmd, err := WrapCommandWithBandwidthLimit(cmd, d.gitOptions.BandwidthLimit)
+	if err != nil {
+		return fmt.Errorf("failed to wrap git pull command with bandwidth limit: %w", err)
+	}
+	
 	cmd.Dir = pullForPath
 	cmd.Env = os.Environ()
 	if d.gitOptions.sshPrivateKey != "" {

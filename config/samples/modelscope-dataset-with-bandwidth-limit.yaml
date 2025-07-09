@@ -1,0 +1,20 @@
+apiVersion: dataset.baizeai.io/v1alpha1
+kind: Dataset
+metadata:
+  name: modelscope-dataset-with-bandwidth-limit
+  namespace: default
+spec:
+  source:
+    type: MODEL_SCOPE
+    uri: modelscope://damo/nlp_structbert_backbone_base_std
+    options:
+      repoType: "model"
+      bandwidthLimit: "8M"  # Limit to 8 MiB/s
+  secretRef: modelscope-credentials
+  volumeClaimTemplate:
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 2Gi

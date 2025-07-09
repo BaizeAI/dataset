@@ -70,15 +70,15 @@ type DatasetSource struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// options is a map of key-value pairs that can be used to specify additional options for the dataset source, e.g. {"branch": "master"}
 	// supported keys for each type of dataset source are:
-	// - GIT: branch, commit, depth, submodules
+	// - GIT: branch, commit, depth, submodules, bandwidthLimit
 	// - S3: region, endpoint, provider, bandwidthLimit
 	// - HTTP: bandwidthLimit, any other key-value pair will be passed to the underlying http client as http headers
 	// - PVC:
 	// - NFS:
-	// - CONDA: requirements.txt, environment.yaml
+	// - CONDA: requirements.txt, environment.yaml, bandwidthLimit
 	// - REFERENCE:
-	// - HUGGING_FACE: repo, repoType, endpoint, include, exclude, revision
-	// - MODEL_SCOPE: repo, repoType, include, exclude, revision
+	// - HUGGING_FACE: repo, repoType, endpoint, include, exclude, revision, bandwidthLimit
+	// - MODEL_SCOPE: repo, repoType, include, exclude, revision, bandwidthLimit
 	// bandwidthLimit: Bandwidth limit for downloads in KiB/s, or use suffix B|K|M|G|T|P (e.g. "1M" for 1 MiB/s, "10M" for 10 MiB/s)
 	Options map[string]string `json:"options,omitempty"`
 }
