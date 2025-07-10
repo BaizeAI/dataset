@@ -1,0 +1,20 @@
+apiVersion: dataset.baizeai.io/v1alpha1
+kind: Dataset
+metadata:
+  name: huggingface-dataset-with-bandwidth-limit
+  namespace: default
+spec:
+  source:
+    type: HUGGING_FACE
+    uri: huggingface://microsoft/DialoGPT-medium
+    options:
+      repoType: "model"
+      bandwidthLimit: "3M"  # Limit to 3 MiB/s
+  secretRef: huggingface-credentials
+  volumeClaimTemplate:
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 5Gi

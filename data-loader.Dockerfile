@@ -21,9 +21,11 @@ RUN pip install --no-cache-dir "huggingface_hub[cli]"==0.33.1 modelscope==1.27.1
     arch=$(uname -m | sed -E 's/x86_64/amd64/g;s/aarch64/arm64/g') && \
     filename=rclone-${rclone_version}-linux-${arch} && \
     wget https://github.com/rclone/rclone/releases/download/${rclone_version}/${filename}.zip -O ${filename}.zip && \
-    unzip ${filename}.zip && mv ${filename}/rclone /usr/local/bin && rm -rf ${filename} ${filename}.zip
+    unzip ${filename}.zip && mv ${filename}/rclone /usr/local/bin && rm -rf ${filename} ${filename}.zip && \
+    apt-get update && apt-get install -y trickle && rm -rf /var/lib/apt/lists/*
 
 
 COPY --from=builder /workspace/data-loader /usr/local/bin/
+COPY entrypoint.sh /usr/local/bin/
 
-ENTRYPOINT ["/usr/local/bin/data-loader"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

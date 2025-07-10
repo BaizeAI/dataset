@@ -1,0 +1,19 @@
+apiVersion: dataset.baizeai.io/v1alpha1
+kind: Dataset
+metadata:
+  name: s3-dataset-limited
+spec:
+  dataSyncRound: 1
+  mountOptions:
+    gid: 1000
+    mode: "0774"
+    path: /
+    uid: 1000
+  source:
+    type: S3
+    uri: s3://my-bucket/models/
+    options:
+      region: "us-east-1"
+      provider: "AWS"
+      bandwidthLimit: "5M"  # Limit download bandwidth to 5 MiB/s
+  secretRef: s3-credentials

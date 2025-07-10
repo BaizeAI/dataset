@@ -125,6 +125,7 @@ func (d *HTTPLoader) Sync(fromURI string, toPath string) error {
 	}
 
 	args = append(args, "-vvv")
+
 	cmd := exec.Command("rclone", args...)
 	cmd.Dir = d.Options.Root
 

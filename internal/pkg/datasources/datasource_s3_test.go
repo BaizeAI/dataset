@@ -63,3 +63,4 @@ func TestS3Loader(t *testing.T) {
 	assert.True(t, strings.HasPrefix(string(bbs[1]), "config create"))
 	assert.True(t, strings.HasPrefix(string(bbs[2]), "sync"))
 }
+

@@ -1,0 +1,20 @@
+apiVersion: dataset.baizeai.io/v1alpha1
+kind: Dataset
+metadata:
+  name: git-dataset-with-bandwidth-limit
+  namespace: default
+spec:
+  source:
+    type: GIT
+    uri: https://github.com/kubernetes/kubernetes.git
+    options:
+      branch: "master"
+      depth: "1"
+      bandwidthLimit: "5M"  # Limit to 5 MiB/s
+  volumeClaimTemplate:
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi

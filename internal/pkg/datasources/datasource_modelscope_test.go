@@ -56,3 +56,4 @@ func TestModelScopeLoader(t *testing.T) {
 	assert.Equal(t, string(bbs[0]), "login --token test-token\n")
 	assert.Equal(t, string(bbs[1]), strings.Join([]string{"download", "ns/model", "--local_dir", modelScopeDir}, " ")+"\n")
 }
+

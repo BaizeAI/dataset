@@ -589,8 +589,13 @@ func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha
 		}
 
 		options := make(map[string]string)
+		var bandwidthLimit string
 		for k, v := range ds.Spec.Source.Options {
-			options[k] = v
+			if k == "bandwidthLimit" {
+				bandwidthLimit = v
+			} else {
+				options[k] = v
+			}
 		}
 
 		podSpec := &jobSpec.Template.Spec
@@ -697,6 +702,14 @@ func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha
 		args = append(args, fmt.Sprintf("--mount-root=%s", pvcMountPath))
 
 		container.Args = args
+
+		// Set bandwidth limit as environment variable if specified
+		if bandwidthLimit != "" {
+			container.Env = append(container.Env, corev1.EnvVar{
+				Name:  "BANDWIDTH_LIMIT",
+				Value: bandwidthLimit,
+			})
+		}
 
 		// 最终创建 Job
 		job := &batchv1.Job{

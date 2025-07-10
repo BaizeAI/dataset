@@ -70,3 +70,4 @@ func TestHuggingFaceLoader(t *testing.T) {
 	assert.Equal(t, string(bbs[2]), "whoami\n")
 	assert.Equal(t, string(bbs[3]), strings.Join([]string{"download", "ns/model", "--local-dir", huggingFaceDir, "--resume-download"}, " ")+"\n")
 }
+
