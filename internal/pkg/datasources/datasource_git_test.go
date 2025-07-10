@@ -269,17 +269,3 @@ func TestGitLoader(t *testing.T) {
 		}, bbs)
 	})
 }
-
-func TestGitLoaderWithBandwidthLimit(t *testing.T) {
-	git, err := NewGitLoader(map[string]string{
-		"branch":         "master",
-		"bandwidthLimit": "3M",
-	}, Options{}, Secrets{
-		Username: "test",
-		Password: "password",
-	})
-	assert.NoError(t, err)
-	
-	// Verify that the bandwidth limit is stored correctly
-	assert.Equal(t, "3M", git.gitOptions.BandwidthLimit)
-}

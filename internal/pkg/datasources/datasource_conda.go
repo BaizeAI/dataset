@@ -28,7 +28,6 @@ type CondaLoaderOptions struct {
 	CondaEnvironmentYmlPath string `json:"condaEnvironmentYmlPath"`
 	PipRequirementsTxtPath  string `json:"pipRequirementsTxtPath"`
 	CondaPrefixDir          string `json:"condaPrefixDir"`
-	BandwidthLimit          string `json:"bandwidthLimit"`
 
 	condaEnvironmentYml string
 	pipRequirementsTxt  string

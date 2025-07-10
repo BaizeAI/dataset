@@ -37,11 +37,10 @@ func NewModelScopeLoader(datasourceOptions map[string]string, options Options, s
 }
 
 type ModelScopeLoaderOptions struct {
-	Revision       string `json:"revision"`
-	RepoType       string `json:"repoType"`
-	Include        string `json:"include"`
-	Exclude        string `json:"exclude"`
-	BandwidthLimit string `json:"bandwidthLimit"`
+	Revision string `json:"revision"`
+	RepoType string `json:"repoType"`
+	Include  string `json:"include"`
+	Exclude  string `json:"exclude"`
 
 	token string
 }
@@ -142,13 +141,6 @@ func (d *ModelScopeLoader) Sync(fromURI string, toPath string) error {
 	}
 
 	cmd := exec.Command("modelscope", args...)
-	
-	// Apply bandwidth limiting if specified
-	cmd, err = WrapCommandWithBandwidthLimit(cmd, d.modelScopeOptions.BandwidthLimit)
-	if err != nil {
-		return fmt.Errorf("failed to wrap modelscope command with bandwidth limit: %w", err)
-	}
-	
 	cmd.Dir = d.Options.Root
 
 	logger = logger.WithField("command", cmd.String())

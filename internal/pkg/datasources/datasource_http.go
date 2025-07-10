@@ -34,7 +34,6 @@ func NewHTTPLoader(datasourceOptions map[string]string, options Options, secrets
 
 	h.httpOptions.basicAuthUsername = secrets.Username
 	h.httpOptions.basicAuthPassword = secrets.Password
-	h.httpOptions.bandwidthLimit = datasourceOptions["bandwidthLimit"]
 
 	return h, nil
 }
@@ -42,7 +41,6 @@ func NewHTTPLoader(datasourceOptions map[string]string, options Options, secrets
 type HTTPLoaderOptions struct {
 	basicAuthUsername string
 	basicAuthPassword string
-	bandwidthLimit    string
 
 	fromURI string
 }
@@ -127,11 +125,6 @@ func (d *HTTPLoader) Sync(fromURI string, toPath string) error {
 	}
 
 	args = append(args, "-vvv")
-
-	// Add bandwidth limit if specified
-	if d.httpOptions.bandwidthLimit != "" {
-		args = append(args, "--bwlimit", d.httpOptions.bandwidthLimit)
-	}
 
 	cmd := exec.Command("rclone", args...)
 	cmd.Dir = d.Options.Root

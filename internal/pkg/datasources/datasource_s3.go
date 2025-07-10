@@ -44,10 +44,9 @@ func NewS3Loader(datasourceOptions map[string]string, options Options, secrets S
 }
 
 type S3LoaderOptions struct {
-	Provider       string `json:"provider"`
-	Region         string `json:"region"`
-	Endpoint       string `json:"endpoint"`
-	BandwidthLimit string `json:"bandwidthLimit"`
+	Provider string `json:"provider"`
+	Region   string `json:"region"`
+	Endpoint string `json:"endpoint"`
 
 	accessKeyID     string
 	secretAccessKey string
@@ -206,11 +205,6 @@ func (d *S3Loader) Sync(fromURI string, toPath string) error {
 	}
 
 	args = append(args, "-vvv")
-
-	// Add bandwidth limit if specified
-	if d.s3Options.BandwidthLimit != "" {
-		args = append(args, "--bwlimit", d.s3Options.BandwidthLimit)
-	}
 
 	cmd := exec.Command("rclone", args...)
 	cmd.Dir = d.Options.Root

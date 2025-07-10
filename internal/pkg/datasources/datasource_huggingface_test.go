@@ -71,23 +71,3 @@ func TestHuggingFaceLoader(t *testing.T) {
 	assert.Equal(t, string(bbs[3]), strings.Join([]string{"download", "ns/model", "--local-dir", huggingFaceDir, "--resume-download"}, " ")+"\n")
 }
 
-func TestHuggingFaceLoaderWithBandwidthLimit(t *testing.T) {
-	loader, err := NewHuggingFaceLoader(map[string]string{
-		"endpoint":       "https://example-hf.com",
-		"bandwidthLimit": "5M",
-	}, Options{
-		Type: "",
-		URI:  "huggingface://ns/model",
-		Path: "",
-		Mode: 0,
-		UID:  0,
-		GID:  0,
-		Root: "",
-	}, Secrets{
-		Token: "test-token",
-	})
-	assert.NoError(t, err)
-	
-	// Verify that the bandwidth limit is stored correctly
-	assert.Equal(t, "5M", loader.huggingFaceOptions.BandwidthLimit)
-}
