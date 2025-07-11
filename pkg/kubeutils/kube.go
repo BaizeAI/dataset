@@ -16,6 +16,12 @@ func IsDeleted(obj client.Object) bool {
 	return obj.GetDeletionTimestamp() != nil
 }
 
+func IsConditionReady(conditions []metav1.Condition, cond string) bool {
+	return lo.ContainsBy(conditions, func(item metav1.Condition) bool {
+		return item.Type == cond && item.Status == metav1.ConditionTrue
+	})
+}
+
 func SetCondition(conditions []metav1.Condition, typ string, err error) []metav1.Condition {
 	if typ == "" {
 		return conditions
@@ -48,15 +54,6 @@ func SetCondition(conditions []metav1.Condition, typ string, err error) []metav1
 		}
 	}
 	return conditions
-}
-
-func ConditionReady(conditions []metav1.Condition, typ string) bool {
-	for _, c := range conditions {
-		if c.Type == typ {
-			return c.Status == metav1.ConditionTrue
-		}
-	}
-	return false
 }
 
 func GetTolerationWithSeconds(TolerationSeconds *int64) []corev1.Toleration {
