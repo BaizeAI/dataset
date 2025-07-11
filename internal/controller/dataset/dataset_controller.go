@@ -54,7 +54,11 @@ const (
 	datasetFinalizer = "dataset-controller"
 	keepConditions   = 5
 
-	condTypeConfig = "Config"
+	condTypeConfig    = "Config"
+	condTypePVC       = "PVC"
+	condTypeJobStatus = "JobStatus"
+	condTypeJob       = "Job"
+	condTypeConfigMap = "ConfigMap"
 )
 
 // DatasetReconciler reconciles a Dataset object
@@ -87,17 +91,17 @@ func (r *DatasetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if kubeutils.IsDeleted(ds) {
 		reconcilers = []reconciler{
 			// {typ: "Job", rec: r.reconcileJob},  // 同样可以加上清理 job 的逻辑
-			{typ: "PVC", rec: r.reconcilePVC},
+			{typ: condTypePVC, rec: r.reconcilePVC},
 			{typ: "", rec: r.reconcileFinalizer},
 		}
 	} else {
 		reconcilers = []reconciler{
 			{typ: condTypeConfig, rec: r.validate},
 			{typ: "", rec: r.reconcileFinalizer},
-			{typ: "PVC", rec: r.reconcilePVC},
-			{typ: "ConfigMap", rec: r.reconcileConfigMap},
-			{typ: "Job", rec: r.reconcileJob},
-			{typ: "JobStatus", rec: r.reconcileJobStatus},
+			{typ: condTypePVC, rec: r.reconcilePVC},
+			{typ: condTypeConfigMap, rec: r.reconcileConfigMap},
+			{typ: condTypeJob, rec: r.reconcileJob},
+			{typ: condTypeJobStatus, rec: r.reconcileJobStatus},
 		}
 	}
 
@@ -192,6 +196,9 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 			// OwnerReference 会将其自动回收，这里不做额外 Delete
 			return nil
 		}
+		if kubeutils.IsConditionReady(ds.Status.Conditions, condTypePVC) {
+			return nil
+		}
 		srcDs, err := r.getSourceDataset(ctx, ds)
 		if err != nil {
 			return err
@@ -220,7 +227,7 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 		// 克隆一个新的 pv 给当前 ds
 		newPv := pv.DeepCopy()
 		newPv.OwnerReferences = datasetOwnerRef(ds)
-		newPv.Name = fmt.Sprintf("dataset-%s-pvc-%s", ds.Namespace, ds.Name)
+		newPv.Name = fmt.Sprintf("dataset-%s-%s-%s", ds.Namespace, ds.Name, ds.UID[:12])
 		if newPv.Labels == nil {
 			newPv.Labels = make(map[string]string)
 		}
