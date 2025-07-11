@@ -3,6 +3,7 @@ package datasources
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/samber/lo"
 	"net/url"
 	"os"
 	"os/exec"
@@ -27,13 +28,14 @@ func NewS3Loader(datasourceOptions map[string]string, options Options, secrets S
 	s3 := new(S3Loader)
 	s3Options, err := s3.parseOptionsFromOptions(datasourceOptions)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse uri %s: %w", options.URI, err)
 	}
 
 	s3.Options = options
 	s3.s3Options = s3Options
 	s3.s3Options.accessKeyID = secrets.AKSKAccessKeyID
 	s3.s3Options.secretAccessKey = secrets.AKSKSecretAccessKey
+	s3.s3Options.SyncMode = lo.CoalesceOrEmpty(datasourceOptions["syncMode"], "sync")
 
 	err = s3.validateOptions(s3Options)
 	if err != nil {
@@ -47,6 +49,7 @@ type S3LoaderOptions struct {
 	Provider string `json:"provider"`
 	Region   string `json:"region"`
 	Endpoint string `json:"endpoint"`
+	SyncMode string `json:"syncMode"`
 
 	accessKeyID     string
 	secretAccessKey string
@@ -70,6 +73,10 @@ func (d *S3Loader) parseOptionsFromOptions(options map[string]string) (S3LoaderO
 func (d *S3Loader) validateOptions(options S3LoaderOptions) error {
 	if options.Provider == "AWS" && options.Region == "" {
 		return fmt.Errorf("--options region <region> is required for AWS provider")
+	}
+
+	if options.SyncMode != "" && options.SyncMode != "sync" && options.SyncMode != "copy" {
+		return fmt.Errorf("invalid syncMode '%s', must be 'sync' or 'copy'", options.SyncMode)
 	}
 
 	return nil
@@ -198,8 +205,10 @@ func (d *S3Loader) Sync(fromURI string, toPath string) error {
 		return err
 	}
 
+	syncMode := d.s3Options.SyncMode
+
 	args := []string{
-		"sync",
+		syncMode,
 		filepath.Join(fmt.Sprintf("%s:%s", configName, bucket), objectDir),
 		toPath,
 	}
