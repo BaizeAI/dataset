@@ -71,7 +71,7 @@ type DatasetSource struct {
 	// options is a map of key-value pairs that can be used to specify additional options for the dataset source, e.g. {"branch": "master"}
 	// supported keys for each type of dataset source are:
 	// - GIT: branch, commit, depth, submodules
-	// - S3: region, endpoint, provider
+	// - S3: region, endpoint, provider, syncMode
 	// - HTTP: any key-value pair will be passed to the underlying http client as http headers
 	// - PVC:
 	// - NFS:
@@ -79,6 +79,7 @@ type DatasetSource struct {
 	// - REFERENCE:
 	// - HUGGING_FACE: repo, repoType, endpoint, include, exclude, revision
 	// - MODEL_SCOPE: repo, repoType, include, exclude, revision
+	// * Note: syncMode can be "sync" (default) or "copy". "sync" removes files in destination that don't exist in source, "copy" only adds/updates files without removing existing ones.
 	Options map[string]string `json:"options,omitempty"`
 }
 
