@@ -3,6 +3,7 @@ package datasources
 import (
 	"encoding/base64"
 	"fmt"
+	"github.com/samber/lo"
 	"net/url"
 	"os"
 	"os/exec"
@@ -34,15 +35,30 @@ func NewHTTPLoader(datasourceOptions map[string]string, options Options, secrets
 
 	h.httpOptions.basicAuthUsername = secrets.Username
 	h.httpOptions.basicAuthPassword = secrets.Password
+	h.httpOptions.SyncMode = lo.CoalesceOrEmpty(datasourceOptions["syncMode"], "sync")
+
+	err = h.validateOptions(h.httpOptions)
+	if err != nil {
+		return nil, err
+	}
 
 	return h, nil
 }
 
 type HTTPLoaderOptions struct {
+	SyncMode string `json:"syncMode"`
+
 	basicAuthUsername string
 	basicAuthPassword string
 
 	fromURI string
+}
+
+func (d *HTTPLoader) validateOptions(options HTTPLoaderOptions) error {
+	if options.SyncMode != "" && options.SyncMode != "sync" && options.SyncMode != "copy" {
+		return fmt.Errorf("invalid syncMode '%s', must be 'sync' or 'copy'", options.SyncMode)
+	}
+	return nil
 }
 
 func (d *HTTPLoader) configTouch() error {
@@ -118,8 +134,10 @@ func (d *HTTPLoader) Sync(fromURI string, toPath string) error {
 		return err
 	}
 
+	syncMode := d.httpOptions.SyncMode
+
 	args := []string{
-		"sync",
+		syncMode,
 		fmt.Sprintf("%s:", configName),
 		toPath,
 	}
