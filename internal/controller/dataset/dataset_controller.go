@@ -102,6 +102,7 @@ func (r *DatasetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			{typ: condTypeConfigMap, rec: r.reconcileConfigMap},
 			{typ: condTypeJob, rec: r.reconcileJob},
 			{typ: condTypeJobStatus, rec: r.reconcileJobStatus},
+			{typ: "", rec: r.reconcileStatusType},
 		}
 	}
 
@@ -110,7 +111,7 @@ func (r *DatasetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		err := rr.rec(ctx, ds)
 		ds.Status.Conditions = kubeutils.SetCondition(ds.Status.Conditions, rr.typ, err)
 		if err != nil {
-			log.Errorf("error reconciling dataset for %s/%s: %v", ds.Namespace, ds.Name, err)
+			log.Errorf("error reconciling dataset(%s) for %s/%s: %v", rr.typ, ds.Namespace, ds.Name, err)
 			break
 		}
 	}
@@ -723,6 +724,19 @@ func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha
 		}
 	}
 
+	return nil
+}
+
+func (r *DatasetReconciler) reconcileStatusType(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
+	if ds.Spec.Source.Type != datasetv1alpha1.DatasetTypeReference {
+		ds.Status.SourceType = ds.Spec.Source.Type
+		return nil
+	}
+	srcDs, err := r.getSourceDataset(ctx, ds)
+	if err != nil {
+		return err
+	}
+	ds.Status.SourceType = srcDs.Status.SourceType
 	return nil
 }
 

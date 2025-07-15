@@ -17,7 +17,7 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.source.type
+    - jsonPath: .status.sourceType
       name: type
       type: string
     - jsonPath: .spec.source.uri
@@ -695,6 +695,11 @@ spec:
                 description: readOnly indicates whether the dataset is mounted as
                   read-only.
                 type: boolean
+              sourceType:
+                description: |-
+                  SourceType defaults to spec.source.type, unless it is a REFERENCE,
+                  in which case it will match the type of the original Dataset.
+                type: string
               syncRoundStatuses:
                 description: |-
                   syncRoundStatuses is a list of data sync round statuses.

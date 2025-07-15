@@ -174,6 +174,9 @@ type DatasetStatus struct {
 	// readOnly indicates whether the dataset is mounted as read-only.
 	ReadOnly     bool        `json:"readOnly,omitempty"`
 	LastSyncTime metav1.Time `json:"lastSyncTime,omitempty"`
+	// SourceType defaults to spec.source.type, unless it is a REFERENCE,
+	// in which case it will match the type of the original Dataset.
+	SourceType DatasetType `json:"sourceType,omitempty"`
 }
 
 // Dataset is the Schema for the datasets API
@@ -181,7 +184,7 @@ type DatasetStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=data
-// +kubebuilder:printcolumn:name="type",type=string,JSONPath=`.spec.source.type`
+// +kubebuilder:printcolumn:name="type",type=string,JSONPath=`.status.sourceType`
 // +kubebuilder:printcolumn:name="uri",type=string,JSONPath=`.spec.source.uri`
 // +kubebuilder:printcolumn:name="phase",type=string,JSONPath=`.status.phase`
 type Dataset struct {
