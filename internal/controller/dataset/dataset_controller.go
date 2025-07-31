@@ -75,6 +75,9 @@ type reconciler struct {
 //+kubebuilder:rbac:groups=dataset.baizeai.io,resources=datasets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=dataset.baizeai.io,resources=datasets/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=dataset.baizeai.io,resources=datasets/finalizers,verbs=update
+//+kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch;delete
+//+kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.16.3/pkg/reconcile
@@ -90,6 +93,7 @@ func (r *DatasetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	var reconcilers []reconciler
 	if kubeutils.IsDeleted(ds) {
 		reconcilers = []reconciler{
+			{typ: "CascadingDeletion", rec: r.reconcileCascadingDeletion},
 			// {typ: "Job", rec: r.reconcileJob},  // 同样可以加上清理 job 的逻辑
 			{typ: condTypePVC, rec: r.reconcilePVC},
 			{typ: "", rec: r.reconcileFinalizer},
@@ -193,6 +197,14 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 	switch ds.Spec.Source.Type {
 	case datasetv1alpha1.DatasetTypeReference:
 		if kubeutils.IsDeleted(ds) {
+			// Enhanced cleanup for reference datasets - also handle retained PVs
+			if config.IsCascadingDeletionEnabled() {
+				// Find and delete the associated retained PV
+				if err := r.cleanupRetainedPV(ctx, ds); err != nil {
+					log.Errorf("Failed to cleanup retained PV for dataset %s/%s: %v", ds.Namespace, ds.Name, err)
+					// Don't fail the deletion process if PV cleanup fails
+				}
+			}
 			// OwnerReference 会将其自动回收，这里不做额外 Delete
 			return nil
 		}
@@ -853,6 +865,88 @@ func (r *DatasetReconciler) validate(ctx context.Context, ds *datasetv1alpha1.Da
 			}
 		}
 	}
+	return nil
+}
+
+func (r *DatasetReconciler) reconcileCascadingDeletion(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
+	// Only perform cascading deletion if enabled in configuration
+	if !config.IsCascadingDeletionEnabled() {
+		return nil
+	}
+
+	// Find all datasets that reference this dataset
+	referencingDatasets, err := r.findReferencingDatasets(ctx, ds)
+	if err != nil {
+		return fmt.Errorf("failed to find referencing datasets: %v", err)
+	}
+
+	// Delete all referencing datasets
+	for _, refDs := range referencingDatasets {
+		log.Infof("Cascading deletion: deleting referencing dataset %s/%s", refDs.Namespace, refDs.Name)
+		if err := r.Delete(ctx, &refDs); err != nil && !k8serrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete referencing dataset %s/%s: %v", refDs.Namespace, refDs.Name, err)
+		}
+	}
+
+	return nil
+}
+
+func (r *DatasetReconciler) findReferencingDatasets(ctx context.Context, sourceDs *datasetv1alpha1.Dataset) ([]datasetv1alpha1.Dataset, error) {
+	// List all datasets across all namespaces
+	allDatasets := &datasetv1alpha1.DatasetList{}
+	if err := r.List(ctx, allDatasets); err != nil {
+		return nil, fmt.Errorf("failed to list datasets: %v", err)
+	}
+
+	var referencingDatasets []datasetv1alpha1.Dataset
+	expectedURI := fmt.Sprintf("dataset://%s/%s", sourceDs.Namespace, sourceDs.Name)
+
+	for _, ds := range allDatasets.Items {
+		// Skip the source dataset itself
+		if ds.Namespace == sourceDs.Namespace && ds.Name == sourceDs.Name {
+			continue
+		}
+
+		// Skip datasets that are already being deleted
+		if kubeutils.IsDeleted(&ds) {
+			continue
+		}
+
+		// Check if this dataset references the source dataset
+		if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeReference && ds.Spec.Source.URI == expectedURI {
+			referencingDatasets = append(referencingDatasets, ds)
+		}
+	}
+
+	return referencingDatasets, nil
+}
+
+func (r *DatasetReconciler) cleanupRetainedPV(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
+	// For reference datasets, look for PVs that were created for this dataset
+	// They follow the naming pattern: dataset-{namespace}-{name}-{uid-prefix}
+	pvName := fmt.Sprintf("dataset-%s-%s-%s", ds.Namespace, ds.Name, ds.UID[:12])
+
+	pv := &corev1.PersistentVolume{}
+	err := r.Get(ctx, client.ObjectKey{Name: pvName}, pv)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			// PV doesn't exist, nothing to clean up
+			return nil
+		}
+		return fmt.Errorf("failed to get PV %s: %v", pvName, err)
+	}
+
+	// Check if this PV has retain policy and is owned by this dataset
+	if pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
+		// Verify ownership by checking labels or owner references
+		if dsName, exists := pv.Labels[constants.DatasetNameLabel]; exists && dsName == ds.Name {
+			log.Infof("Cleaning up retained PV %s for dataset %s/%s", pvName, ds.Namespace, ds.Name)
+			if err := r.Delete(ctx, pv); err != nil && !k8serrors.IsNotFound(err) {
+				return fmt.Errorf("failed to delete retained PV %s: %v", pvName, err)
+			}
+		}
+	}
+
 	return nil
 }
 

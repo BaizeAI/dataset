@@ -31,6 +31,7 @@ metadata:
 data:
   config.yaml: |-
     debug: {{.Values.global.debug }}
+    enable_cascading_deletion: {{ .Values.config.enable_cascading_deletion }}
     dataset_job_spec_yaml: |-
       {{- if .Values.config.dataset_job_spec}}
       {{- $cus := .Values.config.dataset_job_spec }}
