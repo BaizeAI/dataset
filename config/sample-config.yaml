@@ -1,0 +1,30 @@
+# Configuration for the Dataset Controller
+# 
+# To enable cascading deletion of reference datasets when the source dataset is deleted,
+# set enable_cascading_deletion to true. When enabled, if a dataset is deleted and other
+# datasets reference it (via DatasetTypeReference), those referencing datasets will also
+# be automatically deleted along with their associated retained PVs.
+# 
+# Default: false (disabled for safety)
+enable_cascading_deletion: false
+
+# Custom job specification for dataset loading jobs (optional)
+# If not specified, a default job specification will be used
+# dataset_job_spec_yaml: |
+#   backoffLimit: 4
+#   completionMode: NonIndexed
+#   completions: 1
+#   parallelism: 1
+#   template:
+#     spec:
+#       restartPolicy: Never
+#       containers:
+#       - image: ubuntu:20.04
+#         command: ["/bin/bash", "-c", "echo 'Container args: '$(echo $@)"]
+#         resources:
+#           requests:
+#             cpu: 100m
+#             memory: 100Mi
+#           limits:
+#             cpu: 500m
+#             memory: 500Mi

@@ -13,7 +13,8 @@ var (
 )
 
 type configuration struct {
-	DatasetJobSpecYaml string `json:"dataset_job_spec_yaml"`
+	DatasetJobSpecYaml      string `json:"dataset_job_spec_yaml"`
+	EnableCascadingDeletion bool   `json:"enable_cascading_deletion"`
 }
 
 func GetDatasetJobSpecYaml() string {
@@ -40,6 +41,13 @@ template:
 `
 	}
 	return config.DatasetJobSpecYaml
+}
+
+func IsCascadingDeletionEnabled() bool {
+	if config == nil {
+		return false
+	}
+	return config.EnableCascadingDeletion
 }
 
 func ParseConfigFromFileContent(content string) error {
