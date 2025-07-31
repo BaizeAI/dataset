@@ -9,6 +9,9 @@ global:
 
 config:
   dataset_job_spec: {}
+  # Enable cascading deletion of reference datasets when source dataset is deleted
+  # Default: false (disabled for safety)
+  enable_cascading_deletion: false
 
 replicaCount: 1
 
