@@ -16,6 +16,8 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags
 
 FROM python:3.13
 
+RUN apt-get update && apt-get upgrade -y && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir "huggingface_hub[cli]"==0.33.1 modelscope==1.27.1 setuptools && \
     rclone_version=v1.70.1 && \
     arch=$(uname -m | sed -E 's/x86_64/amd64/g;s/aarch64/arm64/g') && \
