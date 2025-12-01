@@ -28,7 +28,7 @@ type FakeDatasetV1alpha1 struct {
 }
 
 func (c *FakeDatasetV1alpha1) Datasets(namespace string) v1alpha1.DatasetInterface {
-	return &FakeDatasets{c, namespace}
+	return newFakeDatasets(c, namespace)
 }
 
 // RESTClient returns a RESTClient that is used to communicate

@@ -18,10 +18,10 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"context"
+	context "context"
 
 	scheme "github.com/BaizeAI/dataset/api/client/scheme"
-	v1alpha1 "github.com/BaizeAI/dataset/api/dataset/v1alpha1"
+	datasetv1alpha1 "github.com/BaizeAI/dataset/api/dataset/v1alpha1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	types "k8s.io/apimachinery/pkg/types"
 	watch "k8s.io/apimachinery/pkg/watch"
@@ -36,33 +36,34 @@ type DatasetsGetter interface {
 
 // DatasetInterface has methods to work with Dataset resources.
 type DatasetInterface interface {
-	Create(ctx context.Context, dataset *v1alpha1.Dataset, opts v1.CreateOptions) (*v1alpha1.Dataset, error)
-	Update(ctx context.Context, dataset *v1alpha1.Dataset, opts v1.UpdateOptions) (*v1alpha1.Dataset, error)
+	Create(ctx context.Context, dataset *datasetv1alpha1.Dataset, opts v1.CreateOptions) (*datasetv1alpha1.Dataset, error)
+	Update(ctx context.Context, dataset *datasetv1alpha1.Dataset, opts v1.UpdateOptions) (*datasetv1alpha1.Dataset, error)
 	// Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
-	UpdateStatus(ctx context.Context, dataset *v1alpha1.Dataset, opts v1.UpdateOptions) (*v1alpha1.Dataset, error)
+	UpdateStatus(ctx context.Context, dataset *datasetv1alpha1.Dataset, opts v1.UpdateOptions) (*datasetv1alpha1.Dataset, error)
 	Delete(ctx context.Context, name string, opts v1.DeleteOptions) error
 	DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error
-	Get(ctx context.Context, name string, opts v1.GetOptions) (*v1alpha1.Dataset, error)
-	List(ctx context.Context, opts v1.ListOptions) (*v1alpha1.DatasetList, error)
+	Get(ctx context.Context, name string, opts v1.GetOptions) (*datasetv1alpha1.Dataset, error)
+	List(ctx context.Context, opts v1.ListOptions) (*datasetv1alpha1.DatasetList, error)
 	Watch(ctx context.Context, opts v1.ListOptions) (watch.Interface, error)
-	Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1alpha1.Dataset, err error)
+	Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *datasetv1alpha1.Dataset, err error)
 	DatasetExpansion
 }
 
 // datasets implements DatasetInterface
 type datasets struct {
-	*gentype.ClientWithList[*v1alpha1.Dataset, *v1alpha1.DatasetList]
+	*gentype.ClientWithList[*datasetv1alpha1.Dataset, *datasetv1alpha1.DatasetList]
 }
 
 // newDatasets returns a Datasets
 func newDatasets(c *DatasetV1alpha1Client, namespace string) *datasets {
 	return &datasets{
-		gentype.NewClientWithList[*v1alpha1.Dataset, *v1alpha1.DatasetList](
+		gentype.NewClientWithList[*datasetv1alpha1.Dataset, *datasetv1alpha1.DatasetList](
 			"datasets",
 			c.RESTClient(),
 			scheme.ParameterCodec,
 			namespace,
-			func() *v1alpha1.Dataset { return &v1alpha1.Dataset{} },
-			func() *v1alpha1.DatasetList { return &v1alpha1.DatasetList{} }),
+			func() *datasetv1alpha1.Dataset { return &datasetv1alpha1.Dataset{} },
+			func() *datasetv1alpha1.DatasetList { return &datasetv1alpha1.DatasetList{} },
+		),
 	}
 }

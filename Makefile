@@ -182,7 +182,7 @@ CODE_GENERATOR_PATH = $(shell go list -m -f '{{.Dir}}' k8s.io/code-generator)
 
 .PHONY: gen-client
 gen-client:
-	rm -rf ./client
+	rm -rf ./api/client
 	go run $(CODE_GENERATOR_PATH)/cmd/client-gen \
 		--input=dataset/v1alpha1 \
 		--clientset-name=client \
@@ -190,3 +190,27 @@ gen-client:
 		--output-dir ./api \
 		--output-pkg github.com/BaizeAI/dataset/api \
 		--input-base github.com/BaizeAI/dataset/api
+
+.PHONY: gen-lister
+gen-lister:
+	rm -rf ./api/client/listers
+	go run $(CODE_GENERATOR_PATH)/cmd/lister-gen \
+		--go-header-file=hack/boilerplate.go.txt \
+		--output-dir ./api/client/listers \
+		--output-pkg github.com/BaizeAI/dataset/api/client/listers \
+		github.com/BaizeAI/dataset/api/dataset/v1alpha1
+
+.PHONY: gen-informer
+gen-informer:
+	rm -rf ./api/client/informers
+	go run $(CODE_GENERATOR_PATH)/cmd/informer-gen \
+		--go-header-file=hack/boilerplate.go.txt \
+		--output-dir ./api/client/informers \
+		--output-pkg github.com/BaizeAI/dataset/api/client/informers \
+		--versioned-clientset-package github.com/BaizeAI/dataset/api/client \
+		--listers-package github.com/BaizeAI/dataset/api/client/listers \
+		--single-directory \
+		github.com/BaizeAI/dataset/api/dataset/v1alpha1
+
+.PHONY: gen-all-client
+gen-all-client: gen-client gen-lister gen-informer
