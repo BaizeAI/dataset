@@ -192,7 +192,7 @@ gen-client:
 		--input-base github.com/BaizeAI/dataset/api
 
 .PHONY: gen-lister
-gen-lister:
+gen-lister: gen-client
 	rm -rf ./api/client/listers
 	go run $(CODE_GENERATOR_PATH)/cmd/lister-gen \
 		--go-header-file=hack/boilerplate.go.txt \
@@ -201,7 +201,7 @@ gen-lister:
 		github.com/BaizeAI/dataset/api/dataset/v1alpha1
 
 .PHONY: gen-informer
-gen-informer:
+gen-informer: gen-lister
 	rm -rf ./api/client/informers
 	go run $(CODE_GENERATOR_PATH)/cmd/informer-gen \
 		--go-header-file=hack/boilerplate.go.txt \
@@ -213,4 +213,4 @@ gen-informer:
 		github.com/BaizeAI/dataset/api/dataset/v1alpha1
 
 .PHONY: gen-all-client
-gen-all-client: gen-client gen-lister gen-informer
+gen-all-client: gen-informer
