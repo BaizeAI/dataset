@@ -1,7 +1,6 @@
 package datasources
 
 import (
-	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -17,7 +16,8 @@ import (
 
 func TestCondaSync(t *testing.T) {
 	t.Run("sync full", func(t *testing.T) {
-		temDir, _ := os.MkdirTemp("", "test-data-*")
+		temDir, err := os.MkdirTemp("", "test-data-*")
+		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, os.RemoveAll(temDir))
 		}()
@@ -133,6 +133,16 @@ func TestCondaSync(t *testing.T) {
 				})
 			})
 		})
+		pipInputs := fakePip.GetAllInputs()
+		require.Len(t, pipInputs, 1)
+		assert.Contains(t, string(pipInputs[0]), temDir+"/requirements.txt")
+
+		rcloneInputs := fakeRclone.GetAllInputs()
+		require.Len(t, rcloneInputs, 2)
+		assert.Contains(t, string(rcloneInputs[0]), condaLoader.loaderOptions.prefixingPkgsDir)
+		assert.Contains(t, string(rcloneInputs[0]), condaLoader.loaderOptions.finalPkgsDir)
+		assert.Contains(t, string(rcloneInputs[1]), condaLoader.loaderOptions.prefixingEnvsDir)
+		assert.Contains(t, string(rcloneInputs[1]), condaLoader.loaderOptions.finalEnvsDir)
 		bbs := fakeConda.GetAllInputs()
 		assert.Contains(t, string(bbs[3]), "env create --file")
 		bbs[3] = nil
@@ -228,8 +238,6 @@ func TestNewCondaLoader(t *testing.T) {
 		prefixingEnvsDir:        "/path/to/prefix/test-env/conda/envs",
 		finalPkgsDir:            "conda/pkgs",
 		finalEnvsDir:            "conda/envs",
-		condaEnvironmentYml:     "name: test-env\n",
-		pipRequirementsTxt:      "foo\nbar\nbaz\n",
 	}, l.loaderOptions)
 }
 
@@ -508,13 +516,25 @@ func TestAssignEssentialDependencies(t *testing.T) {
 			require.NoError(t, err)
 			require.NotEmpty(t, assignedEnvironment)
 			assert.Equal(t, tc.expectedResult, assignedEnvironment)
-
-			str, err := yaml.Marshal(assignedEnvironment)
-			require.NoError(t, err)
-
-			fmt.Println("rendered environment.yaml is:\n", string(str))
 		})
 	}
+}
+
+func TestSyncMissingBothFiles(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "test-missing-both-*")
+	require.NoError(t, err)
+	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	condaLoader, err := NewCondaLoader(map[string]string{
+		"name":                    "test-env",
+		"condaEnvironmentYmlPath": tempDir + "/environment.yml",
+		"pipRequirementsTxtPath":  tempDir + "/requirements.txt",
+		"condaPrefixDir":          tempDir,
+	}, Options{Root: tempDir + "/root"}, Secrets{})
+	require.NoError(t, err)
+
+	err = condaLoader.Sync("", "")
+	require.Error(t, err)
 }
 
 func TestRenderPipConfig(t *testing.T) {
@@ -533,7 +553,6 @@ trusted-host =
 `
 
 	assert.Equal(t, expected, pipConfig)
-	fmt.Printf("rendered pip.conf is:\n%s\n", pipConfig)
 
 	pipConfig, err = renderPipConfig("", []string{"https://sub.example.com/extra-index-url", "https://sub2.example.com/extra-index-url"})
 	require.NoError(t, err)
@@ -548,7 +567,6 @@ trusted-host =
 `
 
 	assert.Equal(t, expected, pipConfig)
-	fmt.Printf("rendered pip.conf is:\n%s\n", pipConfig)
 
 	pipConfig, err = renderPipConfig("", []string{"https://sub.example.com/extra-index-url"})
 	require.NoError(t, err)
@@ -566,5 +584,69 @@ trusted-host = sub.example.com
 	expected = "[global]\n"
 
 	assert.Equal(t, expected, pipConfig)
-	fmt.Printf("rendered pip.conf is:\n%s\n", pipConfig)
+}
+
+func TestSyncWithVenv(t *testing.T) {
+	t.Run("pip only mode", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "test-pip-only-*")
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, os.RemoveAll(tempDir))
+		}()
+		require.NoError(t, os.MkdirAll(tempDir+"/test-env/conda/envs", 0700))
+		require.NoError(t, os.MkdirAll(tempDir+"/root", 0700))
+		require.NoError(t, os.WriteFile(tempDir+"/requirements.txt", []byte("torch>=2.0\n"), 0600))
+
+		condaLoader, err := NewCondaLoader(map[string]string{
+			"name":                   "test-env",
+			"pipIndexUrl":            "https://pypi.example.com/simple",
+			"pipRequirementsTxtPath": tempDir + "/requirements.txt",
+			"condaPrefixDir":         tempDir,
+		}, Options{
+			Root: tempDir + "/root",
+		}, Secrets{})
+		require.NoError(t, err)
+
+		// Setup mocks
+		fakePython := fakeCommand{t: t, cmd: "python3", outputs: []out{{exit: 0}}}
+		defer func() { _ = fakePython.Clean() }()
+
+		fakePip := fakeCommand{
+			t: t, cmd: "pip",
+			path:    path.Join(condaLoader.loaderOptions.envPrefix(), "bin"),
+			outputs: []out{{stdout: "installed", exit: 0}},
+		}
+		defer func() { _ = fakePip.Clean() }()
+
+		fakeRclone := fakeCommand{t: t, cmd: "rclone", outputs: []out{{exit: 0}}}
+		defer func() { _ = fakeRclone.Clean() }()
+
+		// Create venv directory structure
+		venvPath := condaLoader.loaderOptions.envPrefix()
+		require.NoError(t, os.MkdirAll(filepath.Join(venvPath, "bin"), 0700))
+
+		fakePython.WithContext(func() {
+			fakePip.WithContext(func() {
+				fakeRclone.WithContext(func() {
+					err = condaLoader.Sync("", "")
+					assert.NoError(t, err)
+				})
+			})
+		})
+
+		// Verify commands were called correctly
+		assert.Contains(t, string(fakePython.GetAllInputs()[0]), "-m venv")
+		assert.Contains(t, string(fakePip.GetAllInputs()[0]), "install -r")
+		assert.Contains(t, string(fakePip.GetAllInputs()[0]), tempDir+"/requirements.txt")
+
+		rcloneInputs := fakeRclone.GetAllInputs()
+		require.Len(t, rcloneInputs, 1)
+		assert.Contains(t, string(rcloneInputs[0]), condaLoader.loaderOptions.prefixingEnvsDir)
+		assert.Contains(t, string(rcloneInputs[0]), condaLoader.loaderOptions.finalEnvsDir)
+		assert.Contains(t, string(rcloneInputs[0]), "--copy-links")
+
+		info, err := os.Stat(condaLoader.loaderOptions.finalPkgsDir)
+		require.NoError(t, err)
+		require.True(t, info.IsDir())
+	})
 }

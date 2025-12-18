@@ -29,9 +29,6 @@ type CondaLoaderOptions struct {
 	PipRequirementsTxtPath  string `json:"pipRequirementsTxtPath"`
 	CondaPrefixDir          string `json:"condaPrefixDir"`
 
-	condaEnvironmentYml string
-	pipRequirementsTxt  string
-
 	prefixingPkgsDir string
 	prefixingEnvsDir string
 
@@ -113,32 +110,8 @@ func NewCondaLoader(datasourceOption map[string]string, options Options, secrets
 
 	loader.mamba = conda.NewMambaCLI()
 	loader.pip = pip.NewPipCLIWithCondaEnv(loader.loaderOptions.envPrefix())
-	loader.tryReadFile()
 
 	return loader, nil
-}
-
-func (l *CondaLoader) tryReadFile() {
-	logger := log.WithFields(logrus.Fields{
-		"condaEnvironmentYmlPath": l.loaderOptions.condaEnvironmentYml,
-		"pipRequirementsTxtPath":  l.loaderOptions.PipRequirementsTxtPath,
-	})
-
-	condaEnvironmentYml, err := os.ReadFile(l.loaderOptions.CondaEnvironmentYmlPath)
-	if err != nil {
-		logger.WithError(err).Error("Failed to read conda environment yaml")
-	}
-	if err == nil {
-		l.loaderOptions.condaEnvironmentYml = string(condaEnvironmentYml)
-	}
-
-	pipRequirementsTxt, err := os.ReadFile(l.loaderOptions.PipRequirementsTxtPath)
-	if err != nil {
-		logger.WithError(err).Error("Failed to read pip requirements txt")
-	}
-	if err == nil {
-		l.loaderOptions.pipRequirementsTxt = string(pipRequirementsTxt)
-	}
 }
 
 func (l *CondaLoader) writeTemp(logger *logrus.Entry, fileName string, content []byte) (string, func(), error) {
@@ -157,7 +130,8 @@ func (l *CondaLoader) writeTemp(logger *logrus.Entry, fileName string, content [
 	filePath := filepath.Join(tempDir, fileName)
 	err = os.WriteFile(filePath, content, 0644) // #nosec G306
 	if err != nil {
-		return "", cleanup, err
+		cleanup() // 自动清理，避免资源泄露
+		return "", func() {}, err
 	}
 
 	return filePath, cleanup, nil
@@ -436,7 +410,7 @@ func (l *CondaLoader) cleanupNonExistingSymlinks(logger *logrus.Entry) error {
 	return nil
 }
 
-func (l *CondaLoader) moveToMountRoot(logger *logrus.Entry) error {
+func (l *CondaLoader) copyToMountRootWithPkgs(logger *logrus.Entry, includePkgs bool) error {
 	err := os.MkdirAll(filepath.Dir(l.loaderOptions.finalPkgsDir), 0755)
 	if err != nil {
 		logger.WithError(err).Error("Failed to create conda dir")
@@ -455,20 +429,27 @@ func (l *CondaLoader) moveToMountRoot(logger *logrus.Entry) error {
 		return err
 	}
 
-	cmd := exec.Command("rclone",
-		"copyto",
-		l.loaderOptions.prefixingPkgsDir,
-		l.loaderOptions.finalPkgsDir,
-		"--copy-links",
-	) // #nosec G204
+	if includePkgs {
+		cmd := exec.Command("rclone",
+			"copyto",
+			l.loaderOptions.prefixingPkgsDir,
+			l.loaderOptions.finalPkgsDir,
+			"--copy-links",
+		) // #nosec G204
 
-	err = utils.ExecuteCommand(logger, cmd, []string{})
-	if err != nil {
-		logger.WithError(err).Error("Failed to move conda pkgs to mount root")
-		return err
+		err = utils.ExecuteCommand(logger, cmd, []string{})
+		if err != nil {
+			logger.WithError(err).Error("Failed to copy pkgs to mount root")
+			return err
+		}
+	} else {
+		if err := os.MkdirAll(l.loaderOptions.finalPkgsDir, 0755); err != nil {
+			logger.WithError(err).Error("Failed to create empty conda pkgs dir in mount root")
+			return err
+		}
 	}
 
-	cmd = exec.Command("rclone",
+	cmd := exec.Command("rclone",
 		"copyto",
 		l.loaderOptions.prefixingEnvsDir,
 		l.loaderOptions.finalEnvsDir,
@@ -477,7 +458,7 @@ func (l *CondaLoader) moveToMountRoot(logger *logrus.Entry) error {
 
 	err = utils.ExecuteCommand(logger, cmd, []string{})
 	if err != nil {
-		logger.WithError(err).Error("Failed to move conda envs to mount root")
+		logger.WithError(err).Error("Failed to copy envs to mount root")
 		return err
 	}
 
@@ -510,7 +491,82 @@ func (l *CondaLoader) moveToMountRoot(logger *logrus.Entry) error {
 // finalize the conda environment:
 //   - mv /opt/baize-runtime-env/conda/pkgs ${mount-root}/conda/pkgs
 //   - mv /opt/baize-runtime-env/conda/envs ${mount-root}/conda/envs
+
 func (l *CondaLoader) Sync(_ string, _ string) error {
+	hasEnv := true
+	if _, err := os.Stat(l.loaderOptions.CondaEnvironmentYmlPath); err != nil {
+		if os.IsNotExist(err) {
+			hasEnv = false
+		} else {
+			return fmt.Errorf("stat conda environment yaml %q: %w", l.loaderOptions.CondaEnvironmentYmlPath, err)
+		}
+	}
+
+	hasReq := true
+	if _, err := os.Stat(l.loaderOptions.PipRequirementsTxtPath); err != nil {
+		if os.IsNotExist(err) {
+			hasReq = false
+		} else {
+			return fmt.Errorf("stat pip requirements txt %q: %w", l.loaderOptions.PipRequirementsTxtPath, err)
+		}
+	}
+
+	if hasEnv {
+		return l.syncWithConda(hasReq)
+	}
+	if hasReq {
+		return l.syncWithVenv()
+	}
+	return fmt.Errorf("missing both conda environment yaml %q and pip requirements txt %q", l.loaderOptions.CondaEnvironmentYmlPath, l.loaderOptions.PipRequirementsTxtPath)
+}
+
+func (l *CondaLoader) syncWithVenv() error {
+	logger := log.WithFields(logrus.Fields{
+		"type":    "PIP_ONLY",
+		"root":    l.Options.Root,
+		"envName": l.loaderOptions.Name,
+	})
+
+	logger.Info("Using PIP-only mode (no environment.yml provided)")
+
+	venvPath := l.loaderOptions.envPrefix()
+
+	if err := pip.CreateVenv(logger, venvPath); err != nil {
+		logger.WithError(err).Error("Failed to create venv")
+		return fmt.Errorf("create venv: %w", err)
+	}
+
+	l.pip = pip.NewPipCLIWithCondaEnv(venvPath)
+
+	if l.loaderOptions.PipIndexURL != "" || l.loaderOptions.PipExtraIndexURL != "" {
+		pipConfig, err := renderPipConfig(l.loaderOptions.PipIndexURL, l.loaderOptions.extraIndexURLs())
+		if err != nil {
+			logger.WithError(err).Error("Failed to render pip config")
+			return err
+		}
+		pipConfigFilePath, cleanup, err := l.writeTemp(logger, "pip.conf", []byte(pipConfig))
+		if err != nil {
+			logger.WithError(err).Error("Failed to write temp pip config file")
+			return err
+		}
+		defer cleanup()
+		l.pip.ConfigFilePath = pipConfigFilePath
+	}
+
+	if err := l.pip.InstallWithRequirementsTxt(logger, l.loaderOptions.PipRequirementsTxtPath); err != nil {
+		logger.WithError(err).Error("Failed to install requirements")
+		return err
+	}
+
+	if err := l.copyToMountRootWithPkgs(logger, false); err != nil {
+		logger.WithError(err).Error("Failed to copy environment to mount root")
+		return err
+	}
+
+	return nil
+}
+
+func (l *CondaLoader) syncWithConda(hasReq bool) error {
 	logger := log.WithFields(logrus.Fields{
 		"type":                        TypeConda,
 		"applicationWorkingDirectory": lo.Must(os.Getwd()),
@@ -553,14 +609,19 @@ func (l *CondaLoader) Sync(_ string, _ string) error {
 
 	var environment map[string]any
 
-	if l.loaderOptions.condaEnvironmentYml != "" {
-		err = yaml.Unmarshal([]byte(l.loaderOptions.condaEnvironmentYml), &environment)
+	if l.loaderOptions.CondaEnvironmentYmlPath != "" {
+		condaEnvironmentYml, err := os.ReadFile(l.loaderOptions.CondaEnvironmentYmlPath)
 		if err != nil {
+			logger.WithError(err).Error("Failed to read conda environment yaml")
+			return err
+		}
+
+		if err := yaml.Unmarshal(condaEnvironmentYml, &environment); err != nil {
 			logger.WithError(err).Error("Failed to unmarshal environment")
 			return err
 		}
 
-		fmt.Printf("loaded environment:\n%s\n", lo.Must(yaml.Marshal(environment)))
+		logger.WithField("environment", string(lo.Must(yaml.Marshal(environment)))).Debug("Loaded environment.yml")
 	} else {
 		environment = make(map[string]any)
 	}
@@ -584,7 +645,7 @@ func (l *CondaLoader) Sync(_ string, _ string) error {
 		return err
 	}
 
-	fmt.Printf("new modified environment:\n%s\n", lo.Must(yaml.Marshal(environment)))
+	logger.WithField("environment", string(lo.Must(yaml.Marshal(environment)))).Debug("Normalized environment.yml")
 
 	environmentFilePath, cleanup, err := l.writeTemp(logger, "environment.yml", environmentYAMLData)
 	if err != nil {
@@ -599,7 +660,7 @@ func (l *CondaLoader) Sync(_ string, _ string) error {
 		return err
 	}
 
-	if l.loaderOptions.pipRequirementsTxt != "" {
+	if hasReq {
 		if l.loaderOptions.PipIndexURL != "" || l.loaderOptions.PipExtraIndexURL != "" {
 			pipConfig, err := renderPipConfig(
 				l.loaderOptions.PipIndexURL,
@@ -620,15 +681,8 @@ func (l *CondaLoader) Sync(_ string, _ string) error {
 			l.pip.ConfigFilePath = pipConfigFilePath
 		}
 
-		requirementsFilePath, cleanup, err := l.writeTemp(logger, "requirements.txt", []byte(l.loaderOptions.pipRequirementsTxt))
-		if err != nil {
-			logger.WithError(err).Error("Failed to write temp requirements file")
-			return err
-		}
-		defer cleanup()
-
 		// Install requirements
-		err = l.pip.InstallWithRequirementsTxt(logger, requirementsFilePath)
+		err = l.pip.InstallWithRequirementsTxt(logger, l.loaderOptions.PipRequirementsTxtPath)
 		if err != nil {
 			logger.WithError(err).Error("Failed to install requirements")
 			return err
@@ -647,9 +701,9 @@ func (l *CondaLoader) Sync(_ string, _ string) error {
 		return err
 	}
 
-	err = l.moveToMountRoot(logger)
+	err = l.copyToMountRootWithPkgs(logger, true)
 	if err != nil {
-		logger.WithError(err).Error("Failed to move conda envs and pkgs to mount root")
+		logger.WithError(err).Error("Failed to copy environment to mount root")
 		return err
 	}
 

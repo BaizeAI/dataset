@@ -41,6 +41,15 @@ func NewPipCLIWithCondaEnv(envPrefix string) *PipCLI {
 	}
 }
 
+// CreateVenv creates a virtual environment using python -m venv
+func CreateVenv(logger *logrus.Entry, venvPath string) error {
+	cmd := exec.Command("python3", "-m", "venv", venvPath) // #nosec G204
+	cmd.Env = os.Environ()
+
+	_, err := utils.ExecuteCommandWithOutput(logger, cmd, []string{})
+	return err
+}
+
 func (p *PipCLI) bin() string {
 	if p.Bin != "" {
 		return p.Bin
