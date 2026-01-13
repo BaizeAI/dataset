@@ -133,6 +133,19 @@ type DatasetSpec struct {
 	DataSyncRound int32 `json:"dataSyncRound,omitempty"`
 	// +kubebuilder:validation:Optional
 	VolumeClaimTemplate v1.PersistentVolumeClaim `json:"volumeClaimTemplate,omitempty"`
+	// +kubebuilder:validation:Optional
+	// volumeClaimRef is the reference to an existing PVC.
+	VolumeClaimRef *VolumeClaimRef `json:"volumeClaimRef,omitempty"`
+}
+
+type VolumeClaimRef struct {
+	// +kubebuilder:validation:Required
+	// name is the name of the pvc.
+	Name string `json:"name"`
+
+	// +kubebuilder:validation:Optional
+	// subPath is the subPath of the pvc.
+	SubPath string `json:"subPath,omitempty"`
 }
 
 type DataLoadStatus struct {
