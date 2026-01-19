@@ -204,6 +204,18 @@ spec:
                 - type
                 - uri
                 type: object
+              volumeClaimRef:
+                description: volumeClaimRef is the reference to an existing PVC.
+                properties:
+                  name:
+                    description: name is the name of the pvc.
+                    type: string
+                  subPath:
+                    description: subPath is the subPath of the pvc.
+                    type: string
+                required:
+                - name
+                type: object
               volumeClaimTemplate:
                 description: PersistentVolumeClaim is a user's request for and claim
                   to a persistent volume

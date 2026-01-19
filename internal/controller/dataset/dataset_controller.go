@@ -19,7 +19,6 @@ package dataset
 import (
 	"context"
 	"fmt"
-	"github.com/BaizeAI/dataset/config"
 	"net/url"
 	"reflect"
 	"regexp"
@@ -37,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/yaml"
 
+	"github.com/BaizeAI/dataset/config"
 	"github.com/BaizeAI/dataset/internal/pkg/constants"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -185,6 +185,10 @@ func (r *DatasetReconciler) reconcileFinalizer(ctx context.Context, ds *datasetv
 }
 
 func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
+	if ds.Spec.VolumeClaimRef != nil {
+		return r.reconcileClaimPVC(ctx, ds)
+	}
+
 	pvcName := ds.Name
 	if v := ds.Spec.VolumeClaimTemplate.Name; v != "" {
 		pvcName = v
@@ -485,6 +489,22 @@ spec:
 	return nil
 }
 
+func (r *DatasetReconciler) reconcileClaimPVC(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
+	var pvc corev1.PersistentVolumeClaim
+	err := r.Get(ctx, client.ObjectKey{Namespace: ds.Namespace, Name: ds.Spec.VolumeClaimRef.Name}, &pvc)
+	if err != nil {
+		return fmt.Errorf("get pvc %s/%s for dataset %s/%s error: %v", ds.Namespace, ds.Spec.VolumeClaimRef.Name, ds.Namespace, ds.Name, err)
+	}
+
+	if pvc.Status.Phase != corev1.ClaimBound {
+		return fmt.Errorf("pvc %s/%s is not bound yet, current phase: %s", ds.Namespace, ds.Spec.VolumeClaimRef.Name, pvc.Status.Phase)
+	}
+
+	log.Infof("skip reconciling pvc for dataset %s/%s, using existing pvc %s and subpath %s", ds.Namespace, ds.Name, ds.Spec.VolumeClaimRef.Name, ds.Spec.VolumeClaimRef.SubPath)
+	ds.Status.PVCName = ds.Spec.VolumeClaimRef.Name
+	return nil
+}
+
 func (r *DatasetReconciler) reconcileConfigMap(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
 	if ds.Spec.Source.Type != datasetv1alpha1.DatasetTypeConda {
 		return nil
@@ -682,10 +702,15 @@ func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha
 				},
 			},
 		})
-		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+
+		volumeMount := corev1.VolumeMount{
 			Name:      "dataset-pvc",
 			MountPath: pvcMountPath,
-		})
+		}
+		if ds.Spec.VolumeClaimRef != nil && ds.Spec.VolumeClaimRef.SubPath != "" {
+			volumeMount.SubPath = ds.Spec.VolumeClaimRef.SubPath
+		}
+		container.VolumeMounts = append(container.VolumeMounts, volumeMount)
 
 		// 构造命令行参数
 		switch ds.Spec.Source.Type {
@@ -865,6 +890,22 @@ func (r *DatasetReconciler) validate(ctx context.Context, ds *datasetv1alpha1.Da
 			}
 		}
 	}
+
+	if ds.Spec.VolumeClaimRef != nil && !reflect.DeepEqual(ds.Spec.VolumeClaimTemplate, corev1.PersistentVolumeClaim{}) {
+		return fmt.Errorf("volumeClaimRef and volumeClaimTemplate cannot be both set")
+	}
+
+	if ds.Spec.VolumeClaimRef != nil {
+		if ds.Spec.VolumeClaimRef.SubPath != "" {
+			if strings.HasPrefix(ds.Spec.VolumeClaimRef.SubPath, "/") {
+				return fmt.Errorf("subPath should not start with '/', got: %s", ds.Spec.VolumeClaimRef.SubPath)
+			}
+			if strings.Contains(ds.Spec.VolumeClaimRef.SubPath, "..") {
+				return fmt.Errorf("subPath should not contain '..', got: %s", ds.Spec.VolumeClaimRef.SubPath)
+			}
+		}
+	}
+
 	return nil
 }
 

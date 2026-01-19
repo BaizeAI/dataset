@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -286,4 +287,155 @@ func TestDatasetReconciler_cleanupRetainedPV(t *testing.T) {
 	deletedPV := &corev1.PersistentVolume{}
 	err = fakeClient.Get(ctx, types.NamespacedName{Name: pvName}, deletedPV)
 	assert.True(t, client.IgnoreNotFound(err) == nil, "PV should be deleted")
+}
+
+func TestDatasetReconciler_reconcileClaimPVC(t *testing.T) {
+	tests := []struct {
+		name        string
+		pvcName     string
+		pvc         *corev1.PersistentVolumeClaim
+		dsName      string
+		wantPVCName string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:    "successful reconciliation when PVC exists and is bound",
+			pvcName: "existing-pvc",
+			pvc: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "existing-pvc",
+					Namespace: "default",
+					Labels:    map[string]string{},
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("10Gi"),
+						},
+					},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimBound,
+				},
+			},
+			dsName:      "test-dataset",
+			wantPVCName: "existing-pvc",
+			wantErr:     false,
+		},
+		{
+			name:        "returns error when PVC does not exist",
+			pvcName:     "non-existent-pvc",
+			pvc:         nil,
+			dsName:      "test-dataset",
+			wantPVCName: "",
+			wantErr:     true,
+			errContains: "get pvc",
+		},
+		{
+			name:    "returns error when PVC is not bound",
+			pvcName: "pending-pvc",
+			pvc: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "pending-pvc",
+					Namespace: "default",
+					Labels:    map[string]string{},
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("10Gi"),
+						},
+					},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimPending,
+				},
+			},
+			dsName:      "test-dataset",
+			wantPVCName: "",
+			wantErr:     true,
+			errContains: "is not bound yet",
+		},
+		{
+			name:    "successful reclamation when PVC is reused by same dataset",
+			pvcName: "dataset-pvc",
+			pvc: &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "dataset-pvc",
+					Namespace: "default",
+					Labels: map[string]string{
+						constants.DatasetNameLabel: "test-dataset",
+					},
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("10Gi"),
+						},
+					},
+				},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase: corev1.ClaimBound,
+				},
+			},
+			dsName:      "test-dataset",
+			wantPVCName: "dataset-pvc",
+			wantErr:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			require.NoError(t, datasetv1alpha1.AddToScheme(scheme))
+			require.NoError(t, corev1.AddToScheme(scheme))
+
+			var objects []client.Object
+			if tt.pvc != nil {
+				objects = append(objects, tt.pvc)
+			}
+
+			ds := &datasetv1alpha1.Dataset{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      tt.dsName,
+					Namespace: "default",
+				},
+				Spec: datasetv1alpha1.DatasetSpec{
+					Source: datasetv1alpha1.DatasetSource{
+						Type: datasetv1alpha1.DatasetTypeGit,
+						URI:  "https://github.com/example/repo.git",
+					},
+					VolumeClaimRef: &datasetv1alpha1.VolumeClaimRef{
+						Name: tt.pvcName,
+					},
+				},
+			}
+
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(objects...).
+				Build()
+
+			reconciler := &DatasetReconciler{
+				Client: fakeClient,
+				Scheme: scheme,
+			}
+
+			ctx := context.Background()
+
+			err := reconciler.reconcileClaimPVC(ctx, ds)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errContains)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantPVCName, ds.Status.PVCName)
+			}
+		})
+	}
 }
