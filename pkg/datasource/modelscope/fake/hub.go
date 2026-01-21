@@ -4,8 +4,8 @@ package fake
 import (
 	"context"
 	"sync"
-
-	"github.com/BaizeAI/dataset/internal/pkg/datasources/modelscope"
+	
+	"github.com/BaizeAI/dataset/pkg/datasource/modelscope"
 )
 
 type FakeHubAPI struct {
