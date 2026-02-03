@@ -142,6 +142,9 @@ type DatasetSpec struct {
 	// +kubebuilder:validation:Optional
 	// volumeClaimRef is the reference to an existing PVC.
 	VolumeClaimRef *VolumeClaimRef `json:"volumeClaimRef,omitempty"`
+	// DataWarmUpResources is the resources required for data warmUp.
+	// +kubebuilder:validation:Optional
+	DataWarmUpResources v1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 type VolumeClaimRef struct {
