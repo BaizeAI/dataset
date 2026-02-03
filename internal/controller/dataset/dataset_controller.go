@@ -753,7 +753,7 @@ func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha
 				Annotations:     ds.Annotations,
 				OwnerReferences: datasetOwnerRef(ds),
 			},
-			Spec: jobSpec,
+			Spec: changeDefinitionForHadoop(ds.Spec.Source.Type, jobSpec, options),
 		}
 		if err := r.Create(ctx, job); err != nil && !k8serrors.IsAlreadyExists(err) {
 			return err
@@ -761,6 +761,61 @@ func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha
 	}
 
 	return nil
+}
+
+func changeDefinitionForHadoop(sourceType datasetv1alpha1.DatasetType, jobSpec batchv1.JobSpec, options map[string]string) batchv1.JobSpec {
+	if sourceType != datasetv1alpha1.DatasetTypeHadoop {
+		return jobSpec
+	}
+	path := "/opt/hadoop/etc/hadoop"
+	cmName := options["hdfsConfigName"]
+	coreSiteXMLName := options["coreSiteXml"]
+	hdfsSiteXMLName := options["hdfsSiteXml"]
+	if jobSpec.Template.Spec.Volumes == nil {
+		jobSpec.Template.Spec.Volumes = make([]corev1.Volume, 0)
+	}
+	jobSpec.Template.Spec.Volumes = append(
+		jobSpec.Template.Spec.Volumes,
+		corev1.Volume{
+			Name: "hadoop-conf",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: cmName,
+					},
+				},
+			},
+		},
+	)
+
+	c := &jobSpec.Template.Spec.Containers[0]
+
+	c.VolumeMounts = append(
+		c.VolumeMounts,
+		corev1.VolumeMount{
+			Name:      "hadoop-conf",
+			MountPath: fmt.Sprintf("%s/%s", path, hdfsSiteXMLName),
+			SubPath:   hdfsSiteXMLName,
+		},
+		corev1.VolumeMount{
+			Name:      "hadoop-conf",
+			MountPath: fmt.Sprintf("%s/%s", path, coreSiteXMLName),
+			SubPath:   coreSiteXMLName,
+		},
+	)
+
+	c.Env = append(
+		c.Env,
+		corev1.EnvVar{
+			Name:  "HADOOP_CONF_DIR",
+			Value: path,
+		},
+		corev1.EnvVar{
+			Name:  "HADOOP_USER_NAME",
+			Value: options["username"],
+		},
+	)
+	return jobSpec
 }
 
 func (r *DatasetReconciler) reconcileJobStatus(ctx context.Context, ds *datasetv1alpha1.Dataset) error {

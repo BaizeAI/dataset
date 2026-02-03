@@ -9,6 +9,8 @@ const (
 	TypeConda       Type = "CONDA"
 	TypeHuggingFace Type = "HUGGING_FACE"
 	TypeModelScope  Type = "MODEL_SCOPE"
+	TypeDatabase    Type = "DATABASE"
+	TypeHadoop      Type = "HADOOP"
 )
 
 var (

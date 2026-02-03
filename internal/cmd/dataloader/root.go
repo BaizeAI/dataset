@@ -121,6 +121,16 @@ func execCopy(rawOptions map[string]string, datasourceOptions datasources.Option
 		if err != nil {
 			return err
 		}
+	case datasources.TypeDatabase:
+		datasourceLoader, err = datasources.NewModelDatabaseLoader(rawOptions, datasourceOptions, secrets)
+		if err != nil {
+			return err
+		}
+	case datasources.TypeHadoop:
+		datasourceLoader, err = datasources.NewModelHadoopLoader(rawOptions, datasourceOptions, secrets)
+		if err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("data source type %s is not supported", datasourceOptions.Type)
 	}

@@ -34,6 +34,8 @@ const (
 	DatasetTypeReference   DatasetType = "REFERENCE"
 	DatasetTypeHuggingFace DatasetType = "HUGGING_FACE"
 	DatasetTypeModelScope  DatasetType = "MODEL_SCOPE"
+	DatasetTypeDatabase    DatasetType = "DATABASE"
+	DatasetTypeHadoop      DatasetType = "HADOOP"
 
 	// must be same as apis/management-api/dataset/v1alpha1/dataset.proto
 	DatasetStatusPhasePending    DatasetStatusPhase = "PENDING"
@@ -49,7 +51,7 @@ const (
 )
 
 type DatasetSource struct {
-	// +kubebuilder:validation:Enum=GIT;S3;HTTP;PVC;NFS;CONDA;REFERENCE;HUGGING_FACE;MODEL_SCOPE
+	// +kubebuilder:validation:Enum=GIT;S3;HTTP;PVC;NFS;CONDA;REFERENCE;HUGGING_FACE;MODEL_SCOPE;DATABASE;HADOOP
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
 	Type DatasetType `json:"type"`
 	// +kubebuilder:validation:Required
@@ -64,6 +66,8 @@ type DatasetSource struct {
 	// - REFERENCE: dataset://<namespace>/<dataset>
 	// - HUGGING_FACE: huggingface://<repoName>?[repoType=<repoType>]
 	// - MODEL_SCOPE: modelscope://<namespace>/<model>
+	// - DATABASE: database://<ip>:<port>
+	// - HADOOP: hdfs://<ip>:<port>
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
 	URI string `json:"uri"`
 	// +kubebuilder:validation:Optional
@@ -80,6 +84,8 @@ type DatasetSource struct {
 	// - HUGGING_FACE: repo, repoType, endpoint, include, exclude, revision
 	// - MODEL_SCOPE: repo, repoType, include, exclude, revision
 	// * Note: syncMode can be "sync" (default) or "copy". "sync" removes files in destination that don't exist in source, "copy" only adds/updates files without removing existing ones.
+	// - DATABASE:
+	// - HADOOP:
 	Options map[string]string `json:"options,omitempty"`
 }
 
