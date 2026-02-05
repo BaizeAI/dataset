@@ -25,9 +25,8 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/apimachinery/pkg/labels"
-
 	"github.com/BaizeAI/dataset/pkg/kubeutils"
+	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/samber/lo"
 	batchv1 "k8s.io/api/batch/v1"
@@ -153,7 +152,9 @@ func supportPreload(ds *datasetv1alpha1.Dataset) bool {
 		datasetv1alpha1.DatasetTypeHTTP,
 		datasetv1alpha1.DatasetTypeConda,
 		datasetv1alpha1.DatasetTypeHuggingFace,
-		datasetv1alpha1.DatasetTypeModelScope:
+		datasetv1alpha1.DatasetTypeModelScope,
+		datasetv1alpha1.DatasetTypeDatabase,
+		datasetv1alpha1.DatasetTypeHadoop:
 		return true
 	default:
 		return false
@@ -542,6 +543,8 @@ func (r *DatasetReconciler) reconcileConfigMap(ctx context.Context, ds *datasetv
 
 func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
 	if !supportPreload(ds) {
+		log.Infof("the type of %s/%s is %s not support preload, quit reconciling job",
+			ds.Spec.Source.Type, ds.Namespace, ds.Name)
 		return nil
 	}
 	if kubeutils.IsDeleted(ds) {
@@ -821,6 +824,8 @@ func changeDefinitionForHadoop(sourceType datasetv1alpha1.DatasetType, jobSpec b
 func (r *DatasetReconciler) reconcileJobStatus(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
 	if !supportPreload(ds) {
 		ds.Status.LastSyncTime = ds.CreationTimestamp
+		log.Infof("the type of %s/%s is %s not support preload, quit reconciling job",
+			ds.Spec.Source.Type, ds.Namespace, ds.Name)
 		return nil
 	}
 	if !ds.Status.InProcessing {
