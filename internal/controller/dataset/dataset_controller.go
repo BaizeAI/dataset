@@ -544,7 +544,7 @@ func (r *DatasetReconciler) reconcileConfigMap(ctx context.Context, ds *datasetv
 func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
 	if !supportPreload(ds) {
 		log.Infof("the type of %s/%s is %s not support preload, quit reconciling job",
-			ds.Spec.Source.Type, ds.Namespace, ds.Name)
+			ds.Namespace, ds.Name, ds.Spec.Source.Type)
 		return nil
 	}
 	if kubeutils.IsDeleted(ds) {
@@ -774,50 +774,65 @@ func changeDefinitionForHadoop(sourceType datasetv1alpha1.DatasetType, jobSpec b
 	cmName := options["hdfsConfigName"]
 	coreSiteXMLName := options["coreSiteXml"]
 	hdfsSiteXMLName := options["hdfsSiteXml"]
+	username := options["username"]
 	if jobSpec.Template.Spec.Volumes == nil {
 		jobSpec.Template.Spec.Volumes = make([]corev1.Volume, 0)
 	}
-	jobSpec.Template.Spec.Volumes = append(
-		jobSpec.Template.Spec.Volumes,
-		corev1.Volume{
-			Name: "hadoop-conf",
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: cmName,
+	if cmName != "" {
+		jobSpec.Template.Spec.Volumes = append(
+			jobSpec.Template.Spec.Volumes,
+			corev1.Volume{
+				Name: "hadoop-conf",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: cmName,
+						},
 					},
 				},
 			},
-		},
-	)
-
+		)
+	}
+	if len(jobSpec.Template.Spec.Containers) == 0 {
+		return jobSpec
+	}
 	c := &jobSpec.Template.Spec.Containers[0]
-
-	c.VolumeMounts = append(
-		c.VolumeMounts,
-		corev1.VolumeMount{
-			Name:      "hadoop-conf",
-			MountPath: fmt.Sprintf("%s/%s", path, hdfsSiteXMLName),
-			SubPath:   hdfsSiteXMLName,
-		},
-		corev1.VolumeMount{
-			Name:      "hadoop-conf",
-			MountPath: fmt.Sprintf("%s/%s", path, coreSiteXMLName),
-			SubPath:   coreSiteXMLName,
-		},
-	)
-
+	if hdfsSiteXMLName != "" {
+		c.VolumeMounts = append(
+			c.VolumeMounts,
+			corev1.VolumeMount{
+				Name:      "hadoop-conf",
+				MountPath: fmt.Sprintf("%s/%s", path, hdfsSiteXMLName),
+				SubPath:   hdfsSiteXMLName,
+			},
+		)
+	}
+	if coreSiteXMLName != "" {
+		c.VolumeMounts = append(
+			c.VolumeMounts,
+			corev1.VolumeMount{
+				Name:      "hadoop-conf",
+				MountPath: fmt.Sprintf("%s/%s", path, coreSiteXMLName),
+				SubPath:   coreSiteXMLName,
+			},
+		)
+	}
 	c.Env = append(
 		c.Env,
 		corev1.EnvVar{
 			Name:  "HADOOP_CONF_DIR",
 			Value: path,
 		},
-		corev1.EnvVar{
-			Name:  "HADOOP_USER_NAME",
-			Value: options["username"],
-		},
 	)
+	if username != "" {
+		c.Env = append(
+			c.Env,
+			corev1.EnvVar{
+				Name:  "HADOOP_USER_NAME",
+				Value: username,
+			},
+		)
+	}
 	return jobSpec
 }
 
@@ -825,7 +840,7 @@ func (r *DatasetReconciler) reconcileJobStatus(ctx context.Context, ds *datasetv
 	if !supportPreload(ds) {
 		ds.Status.LastSyncTime = ds.CreationTimestamp
 		log.Infof("the type of %s/%s is %s not support preload, quit reconciling job",
-			ds.Spec.Source.Type, ds.Namespace, ds.Name)
+			ds.Namespace, ds.Name, ds.Spec.Source.Type)
 		return nil
 	}
 	if !ds.Status.InProcessing {

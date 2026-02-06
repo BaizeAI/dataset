@@ -2,6 +2,7 @@ package datasources
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -51,7 +52,11 @@ type ModelDatabaseLoaderOptions struct {
 
 func (d *ModelDatabaseLoader) convertDatabaseOptions(options map[string]string) (ModelDatabaseLoaderOptions, error) {
 	var mdbOptions ModelDatabaseLoaderOptions
-	tables := strings.Split(options["tables"], ",")
+	rawTables := strings.TrimSpace(options["tables"])
+	if rawTables == "" {
+		return mdbOptions, fmt.Errorf("no table specified")
+	}
+	tables := strings.Split(rawTables, ",")
 	if len(tables) == 0 {
 		return mdbOptions, fmt.Errorf("no table specified")
 	}
@@ -193,5 +198,18 @@ func formatTSVtoCSV(tsv string) string {
 	if tsv == "" {
 		return ""
 	}
-	return strings.Replace(tsv, "\t", ",", -1)
+	reader := csv.NewReader(strings.NewReader(tsv))
+	reader.Comma = '\t'
+	records, err := reader.ReadAll()
+	if err != nil {
+		return ""
+	}
+	var sb strings.Builder
+	writer := csv.NewWriter(&sb)
+	writer.Comma = ',' // 默认就是逗号
+	err = writer.WriteAll(records)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(sb.String())
 }

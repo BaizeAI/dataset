@@ -46,6 +46,9 @@ func (d *ModelHadoopLoader) convertHadoopOptions(options map[string]string) (Mod
 	if err != nil {
 		return ModelHadoopLoaderOptions{}, err
 	}
+	if hadoopOptions.SourcePath == "" {
+		return ModelHadoopLoaderOptions{}, fmt.Errorf("sourcePath option is required and must not be empty")
+	}
 	return hadoopOptions, nil
 }
 
