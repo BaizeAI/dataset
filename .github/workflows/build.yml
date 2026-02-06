@@ -111,3 +111,21 @@ jobs:
           chart_smever=${chart_version#"v"}
           git commit -m "update dataset chart ${chart_smever}"
           git push https://x-access-token:${{ steps.get_app_token.outputs.token }}@github.com/BaizeAI/charts.git
+
+  sync-images:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ build-and-push ]
+    permissions:
+      contents: write
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Sync images
+        run: ./hack/sync-images.sh
