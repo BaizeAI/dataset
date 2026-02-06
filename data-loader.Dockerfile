@@ -42,7 +42,8 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update -yq && \
     jre_arch=$(uname -m | sed -E 's/x86_64/x64/g;s/aarch64/aarch64/g') && \
     wget https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.30%2B7/OpenJDK11U-jre_${jre_arch}_linux_hotspot_11.0.30_7.tar.gz -O jre.tar.gz && \
     tar -zxf jre.tar.gz -C /opt && \
-    mv /opt/jdk-11* /opt/java
+    mv /opt/jdk-11* /opt/java && \
+    rm jre.tar.gz
 
 COPY --from=builder /workspace/data-loader /usr/local/bin/
 

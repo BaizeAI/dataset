@@ -2,7 +2,6 @@ package datasources
 
 import (
 	"bytes"
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -119,7 +118,11 @@ func (d *ModelDatabaseLoader) sync(logger *logrus.Entry, tableName string) error
 		logger.Errorf("error creating file: %v", err)
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			logger.Printf("failed to close file: %v", err)
+		}
+	}()
 
 	// 3. Batch Export
 	for offset := 0; offset < totalRows; offset += batchSize {
@@ -198,18 +201,5 @@ func formatTSVtoCSV(tsv string) string {
 	if tsv == "" {
 		return ""
 	}
-	reader := csv.NewReader(strings.NewReader(tsv))
-	reader.Comma = '\t'
-	records, err := reader.ReadAll()
-	if err != nil {
-		return ""
-	}
-	var sb strings.Builder
-	writer := csv.NewWriter(&sb)
-	writer.Comma = ',' // 默认就是逗号
-	err = writer.WriteAll(records)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(sb.String())
+	return strings.ReplaceAll(tsv, "\t", ",")
 }
