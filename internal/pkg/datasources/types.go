@@ -9,9 +9,13 @@ const (
 	TypeConda       Type = "CONDA"
 	TypeHuggingFace Type = "HUGGING_FACE"
 	TypeModelScope  Type = "MODEL_SCOPE"
+	TypeDatabase    Type = "DATABASE"
+	TypeHadoop      Type = "HADOOP"
 )
 
 var (
-	SupportedTypesString = []string{string(TypeS3), string(TypeGit), string(TypeHTTP), string(TypeConda), string(TypeHuggingFace), string(TypeModelScope)}
-	SupportedTypes       = []Type{TypeS3, TypeGit, TypeHTTP, TypeConda, TypeHuggingFace, TypeModelScope}
+	SupportedTypesString = []string{string(TypeS3), string(TypeGit), string(TypeHTTP), string(TypeConda),
+		string(TypeHuggingFace), string(TypeModelScope), string(TypeDatabase), string(TypeHadoop)}
+	SupportedTypes = []Type{TypeS3, TypeGit, TypeHTTP, TypeConda, TypeHuggingFace, TypeModelScope,
+		TypeDatabase, TypeHadoop}
 )

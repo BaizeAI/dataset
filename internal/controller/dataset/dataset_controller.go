@@ -25,9 +25,8 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/apimachinery/pkg/labels"
-
 	"github.com/BaizeAI/dataset/pkg/kubeutils"
+	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/samber/lo"
 	batchv1 "k8s.io/api/batch/v1"
@@ -153,7 +152,9 @@ func supportPreload(ds *datasetv1alpha1.Dataset) bool {
 		datasetv1alpha1.DatasetTypeHTTP,
 		datasetv1alpha1.DatasetTypeConda,
 		datasetv1alpha1.DatasetTypeHuggingFace,
-		datasetv1alpha1.DatasetTypeModelScope:
+		datasetv1alpha1.DatasetTypeModelScope,
+		datasetv1alpha1.DatasetTypeDatabase,
+		datasetv1alpha1.DatasetTypeHadoop:
 		return true
 	default:
 		return false
@@ -542,6 +543,8 @@ func (r *DatasetReconciler) reconcileConfigMap(ctx context.Context, ds *datasetv
 
 func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
 	if !supportPreload(ds) {
+		log.Infof("the type of %s/%s is %s not support preload, quit reconciling job",
+			ds.Namespace, ds.Name, ds.Spec.Source.Type)
 		return nil
 	}
 	if kubeutils.IsDeleted(ds) {
@@ -753,7 +756,7 @@ func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha
 				Annotations:     ds.Annotations,
 				OwnerReferences: datasetOwnerRef(ds),
 			},
-			Spec: jobSpec,
+			Spec: changeDefinitionForHadoop(ds.Spec.Source.Type, jobSpec, options),
 		}
 		if err := r.Create(ctx, job); err != nil && !k8serrors.IsAlreadyExists(err) {
 			return err
@@ -763,9 +766,81 @@ func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha
 	return nil
 }
 
+func changeDefinitionForHadoop(sourceType datasetv1alpha1.DatasetType, jobSpec batchv1.JobSpec, options map[string]string) batchv1.JobSpec {
+	if sourceType != datasetv1alpha1.DatasetTypeHadoop {
+		return jobSpec
+	}
+	path := "/opt/hadoop/etc/hadoop"
+	cmName := options["hdfsConfigName"]
+	coreSiteXMLName := options["coreSiteXml"]
+	hdfsSiteXMLName := options["hdfsSiteXml"]
+	username := options["username"]
+	if jobSpec.Template.Spec.Volumes == nil {
+		jobSpec.Template.Spec.Volumes = make([]corev1.Volume, 0)
+	}
+	if cmName != "" {
+		jobSpec.Template.Spec.Volumes = append(
+			jobSpec.Template.Spec.Volumes,
+			corev1.Volume{
+				Name: "hadoop-conf",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: cmName,
+						},
+					},
+				},
+			},
+		)
+	}
+	if len(jobSpec.Template.Spec.Containers) == 0 {
+		return jobSpec
+	}
+	c := &jobSpec.Template.Spec.Containers[0]
+	if hdfsSiteXMLName != "" {
+		c.VolumeMounts = append(
+			c.VolumeMounts,
+			corev1.VolumeMount{
+				Name:      "hadoop-conf",
+				MountPath: fmt.Sprintf("%s/%s", path, hdfsSiteXMLName),
+				SubPath:   hdfsSiteXMLName,
+			},
+		)
+	}
+	if coreSiteXMLName != "" {
+		c.VolumeMounts = append(
+			c.VolumeMounts,
+			corev1.VolumeMount{
+				Name:      "hadoop-conf",
+				MountPath: fmt.Sprintf("%s/%s", path, coreSiteXMLName),
+				SubPath:   coreSiteXMLName,
+			},
+		)
+	}
+	c.Env = append(
+		c.Env,
+		corev1.EnvVar{
+			Name:  "HADOOP_CONF_DIR",
+			Value: path,
+		},
+	)
+	if username != "" {
+		c.Env = append(
+			c.Env,
+			corev1.EnvVar{
+				Name:  "HADOOP_USER_NAME",
+				Value: username,
+			},
+		)
+	}
+	return jobSpec
+}
+
 func (r *DatasetReconciler) reconcileJobStatus(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
 	if !supportPreload(ds) {
 		ds.Status.LastSyncTime = ds.CreationTimestamp
+		log.Infof("the type of %s/%s is %s not support preload, quit reconciling job",
+			ds.Namespace, ds.Name, ds.Spec.Source.Type)
 		return nil
 	}
 	if !ds.Status.InProcessing {

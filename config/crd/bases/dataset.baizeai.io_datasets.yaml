@@ -89,6 +89,66 @@ spec:
                     format: int64
                     type: integer
                 type: object
+              resources:
+                description: DataWarmUpResources is the resources required for data
+                  warmUp.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
               secretRef:
                 description: secretRef is the name of the secret that contains credentials
                   for accessing the dataset source.
@@ -166,6 +226,8 @@ spec:
                       - HUGGING_FACE: repo, repoType, endpoint, include, exclude, revision
                       - MODEL_SCOPE: repo, repoType, include, exclude, revision
                       * Note: syncMode can be "sync" (default) or "copy". "sync" removes files in destination that don't exist in source, "copy" only adds/updates files without removing existing ones.
+                      - DATABASE: type(currently only support MySQL, other database types may be supported in the future.), host, port, dbName, tables(in the dbName), exportFormat(currently only support csv)
+                      - HADOOP: coreSiteXml and hdfsSiteXml, sourcePath, username
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
                   type:
@@ -179,6 +241,8 @@ spec:
                     - REFERENCE
                     - HUGGING_FACE
                     - MODEL_SCOPE
+                    - DATABASE
+                    - HADOOP
                     type: string
                     x-kubernetes-validations:
                     - message: Value is immutable
@@ -196,6 +260,8 @@ spec:
                       - REFERENCE: dataset://<namespace>/<dataset>
                       - HUGGING_FACE: huggingface://<repoName>?[repoType=<repoType>]
                       - MODEL_SCOPE: modelscope://<namespace>/<model>
+                      - DATABASE: database://<ip>:<port>
+                      - HADOOP: hdfs://<ip>:<port>
                     type: string
                     x-kubernetes-validations:
                     - message: Value is immutable
