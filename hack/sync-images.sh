@@ -31,7 +31,7 @@ fi
 
 helm repo add dataset https://baizeai.github.io/charts && helm repo update dataset
 
-images=$(helm template dataset/dataset | grep "image:" | awk '{print $2}' |  tr -d '"')
+images=$(helm template --devel dataset/dataset | grep "image:" | awk '{print $2}' |  tr -d '"')
 images=($(printf "%s\n" "${images[@]}" | sort -u))
 arch_list=(linux/amd64 linux/arm64)
 
