@@ -7,7 +7,7 @@ FROM --platform=$BUILDPLATFORM ${HADOOP_IMG} AS hadoop
 
 FROM --platform=$BUILDPLATFORM mysql:8.4 AS mysqlcli
 
-FROM --platform=$BUILDPLATFORM golang:1.25 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -22,7 +22,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags "-s -w" -a -o data-loader ./cmd/data-loader
 
-FROM python:3.13
+FROM python:3.14
 ARG JAVA_HOME=/opt/java
 ARG HADOOP_HOME=/opt/hadoop
 ENV JAVA_HOME=${JAVA_HOME} \
