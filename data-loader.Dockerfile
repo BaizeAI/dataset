@@ -5,7 +5,7 @@ ARG HADOOP_IMG=apache/hadoop:3.4.2
 ############################
 FROM --platform=$BUILDPLATFORM ${HADOOP_IMG} AS hadoop
 
-FROM --platform=$BUILDPLATFORM mysql:8.4 AS mysqlcli
+FROM --platform=$BUILDPLATFORM mysql:9.6 AS mysqlcli
 
 FROM --platform=$BUILDPLATFORM golang:1.25 AS builder
 ARG TARGETOS
