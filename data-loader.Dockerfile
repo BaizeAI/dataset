@@ -33,7 +33,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update -yq && \
     apt-get install -yq --no-install-recommends ca-certificates && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
-    pip install --no-cache-dir "huggingface_hub[cli]"==0.33.1 modelscope==1.27.1 setuptools && \
+    pip install --no-cache-dir "huggingface_hub[cli]"==0.33.1 modelscope==1.27.1 "setuptools<81" && \
     rclone_version=v1.70.1 && \
     arch=$(uname -m | sed -E 's/x86_64/amd64/g;s/aarch64/arm64/g') && \
     filename=rclone-${rclone_version}-linux-${arch} && \
