@@ -25,6 +25,8 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags
 FROM python:3.13
 ARG JAVA_HOME=/opt/java
 ARG HADOOP_HOME=/opt/hadoop
+ENV CONDA_DIR=/opt/conda
+ENV PATH=$CONDA_DIR/bin:$PATH
 ENV JAVA_HOME=${JAVA_HOME} \
     HADOOP_HOME=${HADOOP_HOME} \
     PATH=${PATH}:${HADOOP_HOME}/bin:${JAVA_HOME}/bin
@@ -43,7 +45,11 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update -yq && \
     wget https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.30%2B7/OpenJDK11U-jre_${jre_arch}_linux_hotspot_11.0.30_7.tar.gz -O jre.tar.gz && \
     tar -zxf jre.tar.gz -C /opt && \
     mv /opt/jdk-11* /opt/java && \
-    rm jre.tar.gz
+    rm jre.tar.gz && \
+    wget -q https://github.com/conda-forge/miniforge/releases/download/26.1.0-0/Miniforge3-26.1.0-0-Linux-$(uname -m).sh -O /tmp/miniforge.sh \
+        && bash /tmp/miniforge.sh -b -p $CONDA_DIR \
+        && rm /tmp/miniforge.sh \
+        && conda clean -afy
 
 COPY --from=builder /workspace/data-loader /usr/local/bin/
 
@@ -64,5 +70,5 @@ RUN echo "export JAVA_HOME=${JAVA_HOME}" >> ${HADOOP_HOME}/etc/hadoop/hadoop-env
  && find share/hadoop/common/lib/ \
       \( -name "jetty-*" -o -name "jersey-*" -o -name "netty-*" \) \
       -exec rm -rf {} +
-
+WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/data-loader"]
