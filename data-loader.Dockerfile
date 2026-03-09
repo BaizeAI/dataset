@@ -70,5 +70,5 @@ RUN echo "export JAVA_HOME=${JAVA_HOME}" >> ${HADOOP_HOME}/etc/hadoop/hadoop-env
  && find share/hadoop/common/lib/ \
       \( -name "jetty-*" -o -name "jersey-*" -o -name "netty-*" \) \
       -exec rm -rf {} +
-
+WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/data-loader"]

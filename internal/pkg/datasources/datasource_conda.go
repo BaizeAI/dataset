@@ -373,7 +373,7 @@ func renderPipConfig(pipIndexURL string, pipExtraIndexURLs []string) (string, er
 			return "", err
 		}
 
-		sb.WriteString(fmt.Sprintf("index-url = %s\n", pipIndexURL))
+		fmt.Fprintf(&sb, "index-url = %s\n", pipIndexURL)
 		trustedHosts = append(trustedHosts, parsedPipIndexURL.Host)
 	}
 	if len(pipExtraIndexURLs) > 0 {
@@ -383,7 +383,7 @@ func renderPipConfig(pipIndexURL string, pipExtraIndexURLs []string) (string, er
 				return "", err
 			}
 
-			sb.WriteString(fmt.Sprintf("extra-index-url = %s\n", pipExtraIndexURLs[0]))
+			fmt.Fprintf(&sb, "extra-index-url = %s\n", pipExtraIndexURLs[0])
 			trustedHosts = append(trustedHosts, parsedExtraIndexURL.Host)
 		} else {
 			extraIndexURLs := make([]string, 0, len(pipExtraIndexURLs))
@@ -397,14 +397,18 @@ func renderPipConfig(pipIndexURL string, pipExtraIndexURLs []string) (string, er
 				trustedHosts = append(trustedHosts, parsedExtraIndexURL.Host)
 			}
 
-			sb.WriteString(fmt.Sprintf("extra-index-url =\n    %s\n", strings.Join(extraIndexURLs, "\n    ")))
+			fmt.Fprintf(
+				&sb,
+				"extra-index-url =\n    %s\n",
+				strings.Join(extraIndexURLs, "\n    "),
+			)
 		}
 	}
 	if len(trustedHosts) > 0 {
 		if len(trustedHosts) == 1 {
-			sb.WriteString(fmt.Sprintf("trusted-host = %s\n", trustedHosts[0]))
+			fmt.Fprintf(&sb, "trusted-host = %s\n", trustedHosts[0])
 		} else {
-			sb.WriteString(fmt.Sprintf("trusted-host =\n    %s\n", strings.Join(trustedHosts, "\n    ")))
+			fmt.Fprintf(&sb, "trusted-host =\n    %s\n", strings.Join(trustedHosts, "\n    "))
 		}
 	}
 
