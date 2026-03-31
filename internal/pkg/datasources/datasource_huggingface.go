@@ -118,7 +118,7 @@ func (d *HuggingFaceLoader) login(logger *logrus.Entry, token string) error {
 	cmd := exec.Command("huggingface-cli", args...)
 	cmd.Env = os.Environ()
 
-	_, err := utils.ExecuteCommandWithOutput(logger, cmd, []string{})
+	_, err := utils.ExecuteCommandWithOutput(logger, cmd, []string{token})
 	if err != nil {
 		return err
 	}
@@ -234,7 +234,7 @@ func (d *HuggingFaceLoader) Sync(fromURI string, toPath string) error {
 
 	if err != nil {
 		logger.Errorf("huggingface-cli download command error: %s", errBuffer)
-		return fmt.Errorf("failed to copy data from %s to %s with huggingface-cli command %s, err: %s", fromURI, toPath, cmd.String(), err)
+		return fmt.Errorf("failed to copy data from %s to %s with huggingface-cli command %s, err: %s", fromURI, toPath, utils.ObscureString(cmd.String(), []string{token}), err)
 	}
 	logger.Debugf("huggingface-cli download command output: %s", outBuffer.String())
 
