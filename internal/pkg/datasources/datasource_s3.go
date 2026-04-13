@@ -231,7 +231,7 @@ func (d *S3Loader) Sync(fromURI string, toPath string) error {
 
 	if err != nil {
 		logger.Errorf("rclone copy command error: %s", errBuffer)
-		return fmt.Errorf("failed to copy data from %s to %s with rclone command %s, err: %s", fromURI, toPath, cmd.String(), err)
+		return fmt.Errorf("failed to copy data from %s to %s with rclone command %s, err: %s", fromURI, toPath, utils.ObscureString(cmd.String(), []string{accessKeyID, secretAccessKey}), err)
 	}
 	logger.Debugf("rclone copy command output: %s", outBuffer.String())
 

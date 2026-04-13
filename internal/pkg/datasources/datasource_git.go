@@ -64,15 +64,29 @@ type GitLoaderOptions struct {
 }
 
 func (d *GitLoader) secrets() []string {
-	return []string{
+	return obscureSecrets(
 		d.gitOptions.username,
-		url.QueryEscape(d.gitOptions.username),
 		d.gitOptions.password,
-		url.QueryEscape(d.gitOptions.password),
 		d.gitOptions.sshPrivateKey,
 		d.gitOptions.sshPrivateKeyPassphrase,
-		url.QueryEscape(d.gitOptions.token),
+		d.gitOptions.token,
+	)
+}
+
+func obscureSecrets(secrets ...string) []string {
+	var result []string
+	for _, s := range secrets {
+		if s == "" {
+			continue
+		}
+		result = append(result, s)
+		result = append(result, url.QueryEscape(s))
+		// In certain scenarios (such as shell script processing, cmd.String() formatting, etc.),
+		// URL-encoded strings may be encoded again (e.g., % becomes %25).
+		// Add double-encoded version to defensively cover this case.
+		result = append(result, url.QueryEscape(url.QueryEscape(s)))
 	}
+	return result
 }
 
 func (d *GitLoaderOptions) parseOptionsFromOptions(options map[string]string) (GitLoaderOptions, error) {

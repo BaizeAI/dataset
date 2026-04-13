@@ -81,7 +81,7 @@ func (d *ModelScopeLoader) login(logger *logrus.Entry, token string) error {
 	cmd := exec.Command("modelscope", args...)
 	cmd.Env = os.Environ()
 
-	_, err := utils.ExecuteCommandWithOutput(logger, cmd, []string{})
+	_, err := utils.ExecuteCommandWithOutput(logger, cmd, []string{token})
 	if err != nil {
 		return err
 	}
@@ -153,7 +153,7 @@ func (d *ModelScopeLoader) Sync(fromURI string, toPath string) error {
 
 	if err != nil {
 		logger.Errorf("modelscope download command error: %s", errBuffer)
-		return fmt.Errorf("failed to copy data from %s to %s with modelscope command %s, err: %s", fromURI, toPath, cmd.String(), err)
+		return fmt.Errorf("failed to copy data from %s to %s with modelscope command %s, err: %s", fromURI, toPath, utils.ObscureString(cmd.String(), []string{token}), err)
 	}
 
 	logger.Debugf("modelscope download command output: %s", outBuffer.String())

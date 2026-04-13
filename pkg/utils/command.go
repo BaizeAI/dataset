@@ -12,7 +12,7 @@ import (
 )
 
 func ExecuteCommandWithAllOutput(logger *logrus.Entry, cmd *exec.Cmd, secrets []string) (*bytes.Buffer, *bytes.Buffer, error) {
-	logger = logger.WithField("command", cmd.String())
+	logger = logger.WithField("command", ObscureString(cmd.String(), secrets))
 	logger.Debug("executing command")
 
 	outBuffer, errBuffer := RedirectCmdWithObscureOutputWriter(cmd, secrets)
@@ -43,7 +43,7 @@ func ExecuteCommandWithAllOutput(logger *logrus.Entry, cmd *exec.Cmd, secrets []
 	logger.Debugf("command output: %s", outBuffer.String())
 	if err != nil {
 		logger.Errorf("command failed to execute, error: %s", errBuffer.String())
-		return outBuffer, errBuffer, fmt.Errorf("failed to execute command %s, err: %s", cmd.String(), err)
+		return outBuffer, errBuffer, fmt.Errorf("failed to execute command %s, err: %s", ObscureString(cmd.String(), secrets), err)
 	}
 
 	return outBuffer, errBuffer, nil

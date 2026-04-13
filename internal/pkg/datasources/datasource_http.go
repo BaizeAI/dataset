@@ -82,7 +82,8 @@ func (d *HTTPLoader) configCreate(configName string) error {
 
 	cmd := exec.Command("rclone", args...)
 
-	logger = logger.WithField("command", cmd.String())
+	secrets := []string{d.httpOptions.basicAuthUsername, d.httpOptions.basicAuthPassword}
+	logger = logger.WithField("command", utils.ObscureString(cmd.String(), secrets))
 	logger.Debug("executing command to create a new rclone config")
 
 	outBuffer, errBuffer, err := utils.ExecuteCommandWithAllOutput(logger, cmd, nil)
@@ -158,7 +159,7 @@ func (d *HTTPLoader) Sync(fromURI string, toPath string) error {
 	outBuffer, errBuffer, err := utils.ExecuteCommandWithAllOutput(logger, cmd, []string{basicAuthBase64})
 	if err != nil {
 		logger.Errorf("rclone copy command error: %s", errBuffer)
-		return fmt.Errorf("failed to copy data from %s to %s with rclone command %s, err: %s", fromURI, toPath, cmd.String(), err)
+		return fmt.Errorf("failed to copy data from %s to %s with rclone command %s, err: %s", fromURI, toPath, utils.ObscureString(cmd.String(), []string{basicAuthBase64}), err)
 	}
 	logger.Debugf("rclone copy command output: %s", outBuffer.String())
 
