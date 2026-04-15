@@ -76,7 +76,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
 
       - name: Get the version
         id: get_version
@@ -125,7 +125,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
 
       - name: Sync images
         run: ./hack/sync-images.sh
