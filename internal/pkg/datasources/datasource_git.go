@@ -287,6 +287,44 @@ func (d *GitLoader) stashPendingChanges(logger *logrus.Entry, gitDir string) err
 	return utils.ExecuteCommand(logger, cmd, d.secrets())
 }
 
+// hasInitialCommit reports whether gitDir has a commit checked out. An unborn
+// repository has a .git directory but cannot run commands such as stash or
+// reset, because HEAD does not resolve to a commit yet.
+func (d *GitLoader) hasInitialCommit(gitDir string) bool {
+	cmd := exec.Command("git", "rev-parse", "--verify", "HEAD")
+	cmd.Dir = gitDir
+	cmd.Env = os.Environ()
+
+	return cmd.Run() == nil
+}
+
+// removeStaleHEADLock removes the lock that can be left behind when a previous
+// data-loader run is interrupted while Git updates HEAD. It is cleaned before
+// this loader starts its Git sync sequence.
+func (d *GitLoader) removeStaleHEADLock(gitDir string) (bool, error) {
+	headLockPath := filepath.Join(gitDir, ".git", "HEAD.lock")
+	info, err := os.Lstat(headLockPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("failed to inspect stale Git HEAD lock %s, err: %w", headLockPath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("refusing to remove non-regular Git HEAD lock %s", headLockPath)
+	}
+
+	if err := os.Remove(headLockPath); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to remove stale Git HEAD lock %s, err: %w", headLockPath, err)
+	}
+
+	return true, nil
+}
+
 func (d *GitLoader) resetHardToTargetBranch(logger *logrus.Entry, gitDir string, branch string) error {
 	logger = logger.WithFields(logrus.Fields{
 		"workingDirectory": gitDir,
@@ -573,30 +611,42 @@ func (d *GitLoader) syncWithClone(logger *logrus.Entry, fromURI string, alteredF
 }
 
 func (d *GitLoader) syncWithPull(logger *logrus.Entry, _ string, alteredFromURI string, _ string, finalizedGitDir string) error {
-	err := d.configBeforeOperations(logger, finalizedGitDir)
+	removed, err := d.removeStaleHEADLock(finalizedGitDir)
+	if err != nil {
+		return err
+	}
+	if removed {
+		logger.Warn("removed stale .git/HEAD.lock left by a previous interrupted Git operation")
+	}
+
+	err = d.configBeforeOperations(logger, finalizedGitDir)
 	if err != nil {
 		return err
 	}
 
-	err = d.updateIndex(logger, finalizedGitDir)
-	if err != nil {
-		// update index is ignorable
-		logger.Warnf("failed to update index for git repository, err: %s", err)
-	}
+	if d.hasInitialCommit(finalizedGitDir) {
+		err = d.updateIndex(logger, finalizedGitDir)
+		if err != nil {
+			// update index is ignorable
+			logger.Warnf("failed to update index for git repository, err: %s", err)
+		}
 
-	err = d.addAll(logger, finalizedGitDir)
-	if err != nil {
-		return err
-	}
+		err = d.addAll(logger, finalizedGitDir)
+		if err != nil {
+			return err
+		}
 
-	err = d.stashPendingChanges(logger, finalizedGitDir)
-	if err != nil {
-		return err
-	}
+		err = d.stashPendingChanges(logger, finalizedGitDir)
+		if err != nil {
+			return err
+		}
 
-	err = d.resetHardToTargetBranch(logger, finalizedGitDir, d.gitOptions.Branch)
-	if err != nil {
-		return err
+		err = d.resetHardToTargetBranch(logger, finalizedGitDir, d.gitOptions.Branch)
+		if err != nil {
+			return err
+		}
+	} else {
+		logger.Debug("git repository has no initial commit; skipping stash and reset before initial pull")
 	}
 
 	pullRemoteName := fmt.Sprintf("dataset-pull-remote-%s", utils.RandomHashString(8))

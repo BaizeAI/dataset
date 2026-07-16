@@ -37,8 +37,7 @@ func (f *fakeCommand) Inject() error {
 		require.NoError(f.t, os.WriteFile(path.Join(f.path, fmt.Sprintf(".%s_exit_%d", f.cmd, i)), []byte(strconv.Itoa(o.exit)), 0600))
 	}
 	t, err := template.New("fakeCommand").Parse(
-		`
-#!/usr/bin/env bash
+		`#!/usr/bin/env bash
 index=0
 if [ -f "{{.path}}/.{{.cmd}}_index" ]; then
 	index=$(cat "{{.path}}/.{{.cmd}}_index")
