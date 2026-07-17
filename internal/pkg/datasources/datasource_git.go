@@ -325,7 +325,7 @@ func (d *GitLoader) removeStaleHEADLock(gitDir string) (bool, error) {
 	return true, nil
 }
 
-func (d *GitLoader) resetHardToTargetBranch(logger *logrus.Entry, gitDir string, branch string) error {
+func (d *GitLoader) resetHardToRef(logger *logrus.Entry, gitDir string, ref string) error {
 	logger = logger.WithFields(logrus.Fields{
 		"workingDirectory": gitDir,
 	})
@@ -333,11 +333,7 @@ func (d *GitLoader) resetHardToTargetBranch(logger *logrus.Entry, gitDir string,
 	args := []string{
 		"reset",
 		"--hard",
-	}
-	if branch != "" {
-		args = append(args, branch)
-	} else {
-		args = append(args, "origin/HEAD")
+		ref,
 	}
 
 	cmd := exec.Command("git", args...)
@@ -515,11 +511,11 @@ func (d *GitLoader) branch(logger *logrus.Entry, forPath string) (string, error)
 	return branch, nil
 }
 
-func (d *GitLoader) pull(logger *logrus.Entry, alteredFromURI string, pullForPath string, remoteName string) error {
+func (d *GitLoader) fetch(logger *logrus.Entry, alteredFromURI string, fetchForPath string, remoteName string) error {
 	logger = logger.WithFields(logrus.Fields{
 		"alteredFromURI":   utils.ObscureString(alteredFromURI, d.secrets()),
-		"pullForPath":      pullForPath,
-		"workingDirectory": pullForPath,
+		"fetchForPath":     fetchForPath,
+		"workingDirectory": fetchForPath,
 	})
 	if d.gitOptions.sshPrivateKey != "" && d.gitOptions.sshPrivateKeyFullPath != "" {
 		logger = logger.WithFields(logrus.Fields{
@@ -527,16 +523,16 @@ func (d *GitLoader) pull(logger *logrus.Entry, alteredFromURI string, pullForPat
 		})
 	}
 
-	logger.Debugf("performing git pull command to replicate data served by git server")
+	logger.Debugf("performing git fetch command to replicate data served by git server")
 
 	args := []string{
-		"pull",
+		"fetch",
 		remoteName,
 	}
 	if d.gitOptions.Branch != "" {
 		args = append(args, d.gitOptions.Branch)
 	} else {
-		currentBranch, err := d.branch(logger, pullForPath)
+		currentBranch, err := d.branch(logger, fetchForPath)
 		if err != nil {
 			return err
 		}
@@ -546,7 +542,7 @@ func (d *GitLoader) pull(logger *logrus.Entry, alteredFromURI string, pullForPat
 
 	args = append(args, "-v")
 	cmd := exec.Command("git", args...)
-	cmd.Dir = pullForPath
+	cmd.Dir = fetchForPath
 	cmd.Env = os.Environ()
 	if d.gitOptions.sshPrivateKey != "" {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=no -i %s", d.gitOptions.sshPrivateKeyFullPath))
@@ -640,13 +636,8 @@ func (d *GitLoader) syncWithPull(logger *logrus.Entry, _ string, alteredFromURI 
 		if err != nil {
 			return err
 		}
-
-		err = d.resetHardToTargetBranch(logger, finalizedGitDir, d.gitOptions.Branch)
-		if err != nil {
-			return err
-		}
 	} else {
-		logger.Debug("git repository has no initial commit; skipping stash and reset before initial pull")
+		logger.Debug("git repository has no initial commit; skipping stash before initial fetch")
 	}
 
 	pullRemoteName := fmt.Sprintf("dataset-pull-remote-%s", utils.RandomHashString(8))
@@ -665,7 +656,12 @@ func (d *GitLoader) syncWithPull(logger *logrus.Entry, _ string, alteredFromURI 
 		return err
 	}
 
-	err = d.pull(logger, alteredFromURI, finalizedGitDir, pullRemoteName)
+	err = d.fetch(logger, alteredFromURI, finalizedGitDir, pullRemoteName)
+	if err != nil {
+		return err
+	}
+
+	err = d.resetHardToRef(logger, finalizedGitDir, "FETCH_HEAD")
 	if err != nil {
 		return err
 	}
