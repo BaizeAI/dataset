@@ -49,6 +49,27 @@ func TestGitLoaderSyncFromUnbornRepository(t *testing.T) {
 	}
 }
 
+func TestGitLoaderSyncResetsDivergedRepository(t *testing.T) {
+	remoteDir, branch := createBareGitRemote(t)
+	rootDir := t.TempDir()
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(rootDir, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	loader, err := NewGitLoader(map[string]string{"branch": branch}, Options{Root: rootDir}, Secrets{})
+	require.NoError(t, err)
+	require.NoError(t, loader.Sync(remoteDir, "repository"))
+
+	repoDir := filepath.Join(rootDir, "repository")
+	runGit(t, repoDir, "config", "user.name", "test user")
+	runGit(t, repoDir, "config", "user.email", "test@example.com")
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("local change\n"), 0600))
+	runGit(t, repoDir, "add", "README.md")
+	runGit(t, repoDir, "commit", "-m", "local divergent commit")
+
+	require.NoError(t, loader.Sync(remoteDir, "repository"))
+	assert.Equal(t, "initial content\n", string(requireFileContents(t, filepath.Join(repoDir, "README.md"))))
+}
+
 func createBareGitRemote(t *testing.T) (string, string) {
 	t.Helper()
 
@@ -289,8 +310,10 @@ func TestGitLoader(t *testing.T) {
 			assert.NoError(t, err)
 		})
 		bbs := fakeGit.GetAllInputs()
-		assert.Contains(t, string(bbs[6]), "remote add")
-		assert.Contains(t, string(bbs[7]), "pull")
+		assert.Contains(t, string(bbs[5]), "remote add")
+		assert.Contains(t, string(bbs[6]), "fetch")
+		assert.Equal(t, "reset --hard FETCH_HEAD\n", string(bbs[7]))
+		bbs[5] = []byte{}
 		bbs[6] = []byte{}
 		bbs[7] = []byte{}
 		assert.Equal(t, [][]byte{
@@ -299,7 +322,7 @@ func TestGitLoader(t *testing.T) {
 			[]byte("update-index --refresh\n"),
 			[]byte("add -u\n"),
 			[]byte("stash\n"),
-			[]byte("reset --hard master\n"),
+			{},
 			{},
 			{},
 		}, bbs)
@@ -372,9 +395,13 @@ func TestGitLoader(t *testing.T) {
 			assert.NoError(t, err)
 		})
 		bbs := fakeGit.GetAllInputs()
-		assert.Contains(t, string(bbs[6]), "remote add")
+		assert.Contains(t, string(bbs[5]), "remote add")
+		assert.Contains(t, string(bbs[6]), "branch --show-current")
+		assert.Contains(t, string(bbs[7]), "fetch")
+		assert.Equal(t, "reset --hard FETCH_HEAD\n", string(bbs[8]))
+		bbs[5] = []byte{}
 		bbs[6] = []byte{}
-		assert.Contains(t, string(bbs[8]), "branch1")
+		bbs[7] = []byte{}
 		bbs[8] = []byte{}
 		assert.Equal(t, [][]byte{
 			[]byte("config --global safe.directory *\n"),
@@ -382,9 +409,9 @@ func TestGitLoader(t *testing.T) {
 			[]byte("update-index --refresh\n"),
 			[]byte("add -u\n"),
 			[]byte("stash\n"),
-			[]byte("reset --hard origin/HEAD\n"),
 			{},
-			[]byte("branch --show-current\n"),
+			{},
+			{},
 			{},
 		}, bbs)
 	})
