@@ -1,5 +1,5 @@
 # Build the manager binary
-ARG HADOOP_IMG=apache/hadoop:3.4.2
+ARG HADOOP_IMG=apache/hadoop:3.5.0
 ############################
 # Hadoop client builder
 ############################
