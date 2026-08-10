@@ -439,3 +439,98 @@ func TestDatasetReconciler_reconcileClaimPVC(t *testing.T) {
 		})
 	}
 }
+
+func TestDatasetReconciler_reconcilePVCNFSVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		want     string
+	}{
+		{name: "nfs 4.0", envValue: "4.0", want: "nfsvers=4.0"},
+		{name: "nfs 4.1", envValue: "4.1", want: "nfsvers=4.1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("DATASET_NFS_VERSION", tt.envValue)
+			require.NoError(t, config.ParseConfigFromFileContent(""))
+
+			scheme := runtime.NewScheme()
+			require.NoError(t, datasetv1alpha1.AddToScheme(scheme))
+			require.NoError(t, corev1.AddToScheme(scheme))
+
+			ds := &datasetv1alpha1.Dataset{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "netapp-dataset",
+					Namespace: "default",
+				},
+				Spec: datasetv1alpha1.DatasetSpec{
+					Source: datasetv1alpha1.DatasetSource{
+						Type: datasetv1alpha1.DatasetTypeNFS,
+						URI:  "nfs://10.0.0.1/export/path",
+					},
+				},
+			}
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+			reconciler := &DatasetReconciler{Client: fakeClient, Scheme: scheme}
+
+			require.NoError(t, reconciler.reconcilePVC(context.Background(), ds))
+
+			pv := &corev1.PersistentVolume{}
+			require.NoError(t, fakeClient.Get(context.Background(), client.ObjectKey{
+				Name: "dataset-default-pvc-netapp-dataset",
+			}, pv))
+			assert.Equal(t, []string{tt.want}, pv.Spec.MountOptions)
+		})
+	}
+}
+
+func TestDatasetReconciler_reconcilePVCNFSVersionDoesNotUpdateExistingPV(t *testing.T) {
+	t.Setenv("DATASET_NFS_VERSION", "4.0")
+	require.NoError(t, config.ParseConfigFromFileContent(""))
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, datasetv1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ds := &datasetv1alpha1.Dataset{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "netapp-dataset",
+			Namespace: "default",
+		},
+		Spec: datasetv1alpha1.DatasetSpec{
+			Source: datasetv1alpha1.DatasetSource{
+				Type: datasetv1alpha1.DatasetTypeNFS,
+				URI:  "nfs://10.0.0.1/export/path",
+			},
+		},
+	}
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "dataset-default-pvc-netapp-dataset",
+			Labels: map[string]string{
+				constants.DatasetNameLabel: ds.Name,
+			},
+		},
+		Spec: corev1.PersistentVolumeSpec{
+			MountOptions: []string{"nfsvers=4.1"},
+		},
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ds.Name,
+			Namespace: ds.Namespace,
+			Labels: map[string]string{
+				constants.DatasetNameLabel: ds.Name,
+			},
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pv, pvc).Build()
+	reconciler := &DatasetReconciler{Client: fakeClient, Scheme: scheme}
+
+	require.NoError(t, reconciler.reconcilePVC(context.Background(), ds))
+
+	storedPV := &corev1.PersistentVolume{}
+	require.NoError(t, fakeClient.Get(context.Background(), client.ObjectKey{Name: pv.Name}, storedPV))
+	assert.Equal(t, []string{"nfsvers=4.1"}, storedPV.Spec.MountOptions)
+}

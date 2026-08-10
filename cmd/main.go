@@ -74,6 +74,7 @@ func main() {
 		setupLog.Error(err, "unable to load config")
 		os.Exit(1)
 	}
+	setupLog.Info("configured NFS protocol version", "version", config2.GetDatasetNFSVersion())
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
