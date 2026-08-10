@@ -58,6 +58,23 @@ const (
 	condTypeJobStatus = "JobStatus"
 	condTypeJob       = "Job"
 	condTypeConfigMap = "ConfigMap"
+
+	nfsPersistentVolumeTemplate = `
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  annotations:
+    pv.kubernetes.io/provisioned-by: nfs.csi.k8s.io
+spec:
+  capacity:
+    storage: 100Ti
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-csi
+  csi:
+    driver: nfs.csi.k8s.io
+`
 )
 
 // DatasetReconciler reconciles a Dataset object
@@ -334,27 +351,11 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 
 		// NFS 需要先创建一个 PV
 		var pvTemp corev1.PersistentVolume
-		err := yaml.Unmarshal([]byte(`
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  annotations:
-    pv.kubernetes.io/provisioned-by: nfs.csi.k8s.io
-spec:
-  capacity:
-    storage: 100Ti
-  accessModes:
-    - ReadWriteMany
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: nfs-csi
-  mountOptions:
-    - nfsvers=4.1
-  csi:
-    driver: nfs.csi.k8s.io
-`), &pvTemp)
+		err := yaml.Unmarshal([]byte(nfsPersistentVolumeTemplate), &pvTemp)
 		if err != nil {
 			return err
 		}
+		pvTemp.Spec.MountOptions = []string{fmt.Sprintf("nfsvers=%s", config.GetDatasetNFSVersion())}
 		u, err := url.Parse(ds.Spec.Source.URI)
 		if err != nil {
 			return err

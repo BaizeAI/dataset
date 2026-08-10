@@ -1,12 +1,16 @@
 # Configuration for the Dataset Controller
-# 
+#
 # To enable cascading deletion of reference datasets when the source dataset is deleted,
 # set enable_cascading_deletion to true. When enabled, if a dataset is deleted and other
 # datasets reference it (via DatasetTypeReference), those referencing datasets will also
 # be automatically deleted along with their associated retained PVs.
-# 
+#
 # Default: false (disabled for safety)
 enable_cascading_deletion: false
+
+# NFS protocol version used when creating new NFS PVs (default: 4.1).
+# DATASET_NFS_VERSION takes precedence over this value.
+# dataset_nfs_version: "4.1"
 
 # Custom job specification for dataset loading jobs (optional)
 # If not specified, a default job specification will be used

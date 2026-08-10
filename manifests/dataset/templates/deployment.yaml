@@ -35,6 +35,9 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: {{ template "dataset.controller.image" . }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - name: DATASET_NFS_VERSION
+              value: {{ .Values.config.dataset_nfs_version | default "4.1" | quote }}
           readinessProbe:
             httpGet:
               path: /readyz

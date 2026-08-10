@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -12,9 +13,34 @@ var (
 	config *configuration
 )
 
+const (
+	defaultDatasetNFSVersion = "4.1"
+	datasetNFSVersionEnv     = "DATASET_NFS_VERSION"
+)
+
 type configuration struct {
 	DatasetJobSpecYaml      string `json:"dataset_job_spec_yaml"`
 	EnableCascadingDeletion bool   `json:"enable_cascading_deletion"`
+	DatasetNFSVersion       string `json:"dataset_nfs_version"`
+}
+
+func validateDatasetNFSVersion(version string) error {
+	switch version {
+	case "4.0", "4.1":
+		return nil
+	default:
+		return fmt.Errorf("unsupported dataset NFS version %q, must be one of: 4.0, 4.1", version)
+	}
+}
+
+// GetDatasetNFSVersion returns the NFS protocol version used for newly-created NFS PVs.
+// DATASET_NFS_VERSION is bound during configuration loading and takes precedence over
+// the config file value. The default keeps the existing behavior at NFS 4.1.
+func GetDatasetNFSVersion() string {
+	if config == nil || config.DatasetNFSVersion == "" {
+		return defaultDatasetNFSVersion
+	}
+	return config.DatasetNFSVersion
 }
 
 func GetDatasetJobSpecYaml() string {
@@ -72,15 +98,26 @@ func ParseConfigFromFile(configPath string) error {
 	viper.SetConfigFile(configPath)
 	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	viper.SetDefault("dataset_nfs_version", defaultDatasetNFSVersion)
+	if err := viper.BindEnv("dataset_nfs_version", datasetNFSVersionEnv); err != nil {
+		return err
+	}
 	if err := viper.ReadInConfig(); err != nil {
 		return err
 	}
 	err := viper.Unmarshal(cfg, func(c *mapstructure.DecoderConfig) {
 		c.TagName = "json"
 	})
-	config = cfg
 	if err != nil {
 		return err
 	}
+	cfg.DatasetNFSVersion = strings.TrimSpace(viper.GetString("dataset_nfs_version"))
+	if cfg.DatasetNFSVersion == "" {
+		cfg.DatasetNFSVersion = defaultDatasetNFSVersion
+	}
+	if err := validateDatasetNFSVersion(cfg.DatasetNFSVersion); err != nil {
+		return err
+	}
+	config = cfg
 	return nil
 }

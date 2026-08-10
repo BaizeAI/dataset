@@ -37,3 +37,20 @@ enable_cascading_deletion: true
 ```
 
 **Important**: This feature should be used with caution as it will automatically delete datasets that reference the source dataset. Consider the impact on dependent workloads before enabling this feature.
+
+### NFS Protocol Version
+
+For `NFS` datasets, the controller sets the NFS mount option `nfsvers` when it creates a PersistentVolume. The supported versions are `4.0` and `4.1`; the default is `4.1`.
+
+Set the version in the controller configuration file:
+
+```yaml
+dataset_nfs_version: "4.0"
+```
+
+The `DATASET_NFS_VERSION` environment variable takes precedence over the configuration file. When using the Helm chart, set the corresponding value:
+
+```yaml
+config:
+  dataset_nfs_version: "4.0"
+```
