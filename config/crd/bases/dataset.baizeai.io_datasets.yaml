@@ -228,6 +228,7 @@ spec:
                       * Note: syncMode can be "sync" (default) or "copy". "sync" removes files in destination that don't exist in source, "copy" only adds/updates files without removing existing ones.
                       - DATABASE: type(currently only support MySQL, other database types may be supported in the future.), host, port, dbName, tables(in the dbName), exportFormat(currently only support csv)
                       - HADOOP: coreSiteXml and hdfsSiteXml, sourcePath, username
+                      - MANUAL:
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
                   type:
@@ -243,6 +244,7 @@ spec:
                     - MODEL_SCOPE
                     - DATABASE
                     - HADOOP
+                    - MANUAL
                     type: string
                     x-kubernetes-validations:
                     - message: Value is immutable
@@ -262,6 +264,7 @@ spec:
                       - MODEL_SCOPE: modelscope://<namespace>/<model>
                       - DATABASE: database://<ip>:<port>
                       - HADOOP: hdfs://<ip>:<port>
+                      - MANUAL: manual://
                     type: string
                     x-kubernetes-validations:
                     - message: Value is immutable

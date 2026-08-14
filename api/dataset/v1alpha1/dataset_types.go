@@ -36,6 +36,7 @@ const (
 	DatasetTypeModelScope  DatasetType = "MODEL_SCOPE"
 	DatasetTypeDatabase    DatasetType = "DATABASE"
 	DatasetTypeHadoop      DatasetType = "HADOOP"
+	DatasetTypeManual      DatasetType = "MANUAL"
 
 	// must be same as apis/management-api/dataset/v1alpha1/dataset.proto
 	DatasetStatusPhasePending    DatasetStatusPhase = "PENDING"
@@ -51,7 +52,7 @@ const (
 )
 
 type DatasetSource struct {
-	// +kubebuilder:validation:Enum=GIT;S3;HTTP;PVC;NFS;CONDA;REFERENCE;HUGGING_FACE;MODEL_SCOPE;DATABASE;HADOOP
+	// +kubebuilder:validation:Enum=GIT;S3;HTTP;PVC;NFS;CONDA;REFERENCE;HUGGING_FACE;MODEL_SCOPE;DATABASE;HADOOP;MANUAL
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
 	Type DatasetType `json:"type"`
 	// +kubebuilder:validation:Required
@@ -68,6 +69,7 @@ type DatasetSource struct {
 	// - MODEL_SCOPE: modelscope://<namespace>/<model>
 	// - DATABASE: database://<ip>:<port>
 	// - HADOOP: hdfs://<ip>:<port>
+	// - MANUAL: manual://
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
 	URI string `json:"uri"`
 	// +kubebuilder:validation:Optional
@@ -86,6 +88,7 @@ type DatasetSource struct {
 	// * Note: syncMode can be "sync" (default) or "copy". "sync" removes files in destination that don't exist in source, "copy" only adds/updates files without removing existing ones.
 	// - DATABASE: type(currently only support MySQL, other database types may be supported in the future.), host, port, dbName, tables(in the dbName), exportFormat(currently only support csv)
 	// - HADOOP: coreSiteXml and hdfsSiteXml, sourcePath, username
+	// - MANUAL:
 	Options map[string]string `json:"options,omitempty"`
 }
 

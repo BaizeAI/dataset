@@ -1,0 +1,23 @@
+    debug: true
+    enable_cascading_deletion: false
+    dataset_job_spec_yaml: |-
+      backoffLimit: 4
+      completionMode: NonIndexed
+      completions: 1
+      parallelism: 1
+      template:
+        spec:
+          containers:
+          - command:
+            - /usr/local/bin/data-loader
+            image: ghcr.io/baizeai/dataset-data-loader:v0.1.10
+            resources:
+              limits:
+                cpu: 2000m
+                memory: 2000Mi
+              requests:
+                cpu: 100m
+                memory: 100Mi
+          restartPolicy: Never
+          securityContext:
+            runAsUser: 0
