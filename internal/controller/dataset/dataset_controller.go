@@ -105,7 +105,7 @@ func (r *DatasetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	status := ds.Status.DeepCopy()
+	prevStatus := ds.Status.DeepCopy()
 	var reconcilers []reconciler
 	if kubeutils.IsDeleted(ds) {
 		reconcilers = []reconciler{
@@ -144,8 +144,8 @@ func (r *DatasetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	resOk := ctrl.Result{}
 
-	if !reflect.DeepEqual(ds.Status, *status) {
-		err := r.Status().Update(ctx, ds)
+	if !reflect.DeepEqual(ds.Status, *prevStatus) {
+		err := r.updateStatus(ctx, ds, prevStatus)
 		if err != nil {
 			log.Errorf("error update status for %s/%s: %v", ds.Namespace, ds.Name, err)
 			return res30sec, err
@@ -160,6 +160,15 @@ func (r *DatasetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	default:
 		return res30sec, nil
 	}
+}
+
+func (r *DatasetReconciler) updateStatus(ctx context.Context, ds *datasetv1alpha1.Dataset, prevStatus *datasetv1alpha1.DatasetStatus) error {
+	// Use a status-only merge patch instead of Status().Update. The dataset
+	// may have been updated while reconciling (for example, when adding the
+	// finalizer), and a full update would then fail on a stale resourceVersion.
+	statusBase := ds.DeepCopy()
+	statusBase.Status = *prevStatus
+	return r.Status().Patch(ctx, ds, client.MergeFrom(statusBase))
 }
 
 func supportPreload(ds *datasetv1alpha1.Dataset) bool {
@@ -544,8 +553,8 @@ func (r *DatasetReconciler) reconcileConfigMap(ctx context.Context, ds *datasetv
 
 func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
 	if !supportPreload(ds) {
-		log.Infof("the type of %s/%s is %s not support preload, quit reconciling job",
-			ds.Namespace, ds.Name, ds.Spec.Source.Type)
+		// log.Infof("the type of %s/%s is %s not support preload, reconciling job is skipped",
+		// 	ds.Namespace, ds.Name, ds.Spec.Source.Type)
 		return nil
 	}
 	if kubeutils.IsDeleted(ds) {
@@ -840,8 +849,8 @@ func changeDefinitionForHadoop(sourceType datasetv1alpha1.DatasetType, jobSpec b
 func (r *DatasetReconciler) reconcileJobStatus(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
 	if !supportPreload(ds) {
 		ds.Status.LastSyncTime = ds.CreationTimestamp
-		log.Infof("the type of %s/%s is %s not support preload, quit reconciling job",
-			ds.Namespace, ds.Name, ds.Spec.Source.Type)
+		// log.Infof("the type of %s/%s is %s not support preload, reconciling job status is skipped",
+		// 	ds.Namespace, ds.Name, ds.Spec.Source.Type)
 		return nil
 	}
 	if !ds.Status.InProcessing {
@@ -912,6 +921,18 @@ func (r *DatasetReconciler) reconcilePhase(_ context.Context, ds *datasetv1alpha
 			ds.Status.Phase = datasetv1alpha1.DatasetStatusPhaseFailed
 			return nil
 		}
+	case datasetv1alpha1.DatasetTypeManual:
+		if _, ok := lo.Find(ds.Status.Conditions, func(c metav1.Condition) bool {
+			return c.Status == metav1.ConditionFalse
+		}); ok {
+			phase = datasetv1alpha1.DatasetStatusPhaseFailed
+		} else if ds.Status.PVCName == "" || !kubeutils.IsConditionReady(ds.Status.Conditions, condTypePVC) {
+			phase = datasetv1alpha1.DatasetStatusPhasePending
+		} else {
+			phase = datasetv1alpha1.DatasetStatusPhaseReady
+		}
+		ds.Status.Phase = phase
+		return nil
 	}
 
 	if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypePVC {
@@ -943,6 +964,10 @@ func (r *DatasetReconciler) getSourceDataset(ctx context.Context, ds *datasetv1a
 }
 
 func (r *DatasetReconciler) validate(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
+	if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeManual && ds.Spec.Source.URI != "manual://" {
+		return fmt.Errorf("MANUAL dataset source URI must be manual://")
+	}
+
 	if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeReference {
 		sourceDs, err := r.getSourceDataset(ctx, ds)
 		if err != nil {
