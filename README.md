@@ -40,7 +40,7 @@ enable_cascading_deletion: true
 
 ### NFS Protocol Version
 
-For `NFS` datasets, the controller sets the NFS mount option `nfsvers` when it creates a PersistentVolume. The supported versions are `4.0` and `4.1`; the default is `4.1`.
+For `NFS` datasets, the controller sets the NFS mount option `nfsvers` when it creates a PersistentVolume. The supported versions are `3`, `4.0`, `4.1`, and `4.2`; the default is `4.1`.
 
 Set the version in the controller configuration file:
 

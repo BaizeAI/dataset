@@ -448,6 +448,8 @@ func TestDatasetReconciler_reconcilePVCNFSVersion(t *testing.T) {
 	}{
 		{name: "nfs 4.0", envValue: "4.0", want: "nfsvers=4.0"},
 		{name: "nfs 4.1", envValue: "4.1", want: "nfsvers=4.1"},
+		{name: "nfs 3", envValue: "3", want: "nfsvers=3"},
+		{name: "nfs 4.2", envValue: "4.2", want: "nfsvers=4.2"},
 	}
 
 	for _, tt := range tests {

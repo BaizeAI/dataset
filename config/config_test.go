@@ -25,6 +25,16 @@ func TestDatasetNFSVersion(t *testing.T) {
 			want:       "4.0",
 		},
 		{
+			name:       "nfs 3 config value",
+			configData: "dataset_nfs_version: \"3\"",
+			want:       "3",
+		},
+		{
+			name:       "nfs 4.2 config value",
+			configData: "dataset_nfs_version: \"4.2\"",
+			want:       "4.2",
+		},
+		{
 			name:       "environment overrides config",
 			configData: "dataset_nfs_version: \"4.1\"",
 			envValue:   "4.0",
@@ -42,7 +52,7 @@ func TestDatasetNFSVersion(t *testing.T) {
 }
 
 func TestParseConfigRejectsUnsupportedDatasetNFSVersion(t *testing.T) {
-	t.Setenv(datasetNFSVersionEnv, "4.2")
+	t.Setenv(datasetNFSVersionEnv, "5")
 	err := ParseConfigFromFileContent("dataset_nfs_version: \"4.1\"")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported dataset NFS version")

@@ -8,7 +8,7 @@
 # Default: false (disabled for safety)
 enable_cascading_deletion: false
 
-# NFS protocol version used when creating new NFS PVs (default: 4.1).
+# NFS protocol version used when creating new NFS PVs (supported: 3, 4.0, 4.1, 4.2; default: 4.1).
 # DATASET_NFS_VERSION takes precedence over this value.
 # dataset_nfs_version: "4.1"
 
