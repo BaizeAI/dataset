@@ -26,10 +26,10 @@ type configuration struct {
 
 func validateDatasetNFSVersion(version string) error {
 	switch version {
-	case "4.0", "4.1":
+	case "3", "4.0", "4.1", "4.2":
 		return nil
 	default:
-		return fmt.Errorf("unsupported dataset NFS version %q, must be one of: 4.0, 4.1", version)
+		return fmt.Errorf("unsupported dataset NFS version %q, must be one of: 3, 4.0, 4.1, 4.2", version)
 	}
 }
 
