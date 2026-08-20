@@ -9,8 +9,9 @@ global:
 
 config:
   dataset_job_spec: {}
-  # NFS protocol version used when creating new NFS PVs. This
-  # value will be passed to the controller through DATASET_NFS_VERSION.
+  # NFS protocol version used when creating new NFS PVs. Supported values are
+  # 3, 4.0, 4.1, and 4.2. This value is passed to the controller through
+  # DATASET_NFS_VERSION.
   dataset_nfs_version: "4.1"
   # Enable cascading deletion of reference datasets when source dataset is deleted
   # Default: false (disabled for safety)
