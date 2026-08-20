@@ -553,8 +553,8 @@ func (r *DatasetReconciler) reconcileConfigMap(ctx context.Context, ds *datasetv
 
 func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
 	if !supportPreload(ds) {
-		// log.Infof("the type of %s/%s is %s not support preload, reconciling job is skipped",
-		// 	ds.Namespace, ds.Name, ds.Spec.Source.Type)
+		log.Infof("the type of %s/%s is %s not support preload, reconciling job is skipped",
+			ds.Namespace, ds.Name, ds.Spec.Source.Type)
 		return nil
 	}
 	if kubeutils.IsDeleted(ds) {
@@ -849,8 +849,8 @@ func changeDefinitionForHadoop(sourceType datasetv1alpha1.DatasetType, jobSpec b
 func (r *DatasetReconciler) reconcileJobStatus(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
 	if !supportPreload(ds) {
 		ds.Status.LastSyncTime = ds.CreationTimestamp
-		// log.Infof("the type of %s/%s is %s not support preload, reconciling job status is skipped",
-		// 	ds.Namespace, ds.Name, ds.Spec.Source.Type)
+		log.Infof("the type of %s/%s is %s not support preload, reconciling job status is skipped",
+			ds.Namespace, ds.Name, ds.Spec.Source.Type)
 		return nil
 	}
 	if !ds.Status.InProcessing {
