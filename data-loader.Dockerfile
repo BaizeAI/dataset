@@ -1,5 +1,5 @@
 # Build the manager binary
-ARG HADOOP_IMG=apache/hadoop:3.4.2
+ARG HADOOP_IMG=apache/hadoop:3.5.0
 ############################
 # Hadoop client builder
 ############################
@@ -7,7 +7,7 @@ FROM --platform=$BUILDPLATFORM ${HADOOP_IMG} AS hadoop
 
 FROM --platform=$BUILDPLATFORM mysql:8.4 AS mysqlcli
 
-FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
