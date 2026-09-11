@@ -30,10 +30,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	datasetv1alpha1 "github.com/BaizeAI/dataset/api/dataset/v1alpha1"
 	"github.com/BaizeAI/dataset/config"
 	"github.com/BaizeAI/dataset/internal/pkg/constants"
+	"github.com/BaizeAI/dataset/pkg/kubeutils"
+	"github.com/BaizeAI/dataset/pkg/mountpolicy"
 )
 
 func TestDatasetReconciler_findReferencingDatasets(t *testing.T) {
@@ -126,6 +130,37 @@ func TestDatasetReconciler_findReferencingDatasets(t *testing.T) {
 	assert.False(t, foundNames["source-dataset"])
 }
 
+func TestDatasetReconciler_enqueueReferenceDatasetsScopesDependencies(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, datasetv1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	source := &datasetv1alpha1.Dataset{ObjectMeta: metav1.ObjectMeta{Name: "source", Namespace: "origin"}}
+	middle := &datasetv1alpha1.Dataset{ObjectMeta: metav1.ObjectMeta{Name: "middle", Namespace: "middle"}, Spec: datasetv1alpha1.DatasetSpec{Source: datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeReference, URI: "dataset://origin/source"}}}
+	leaf := &datasetv1alpha1.Dataset{ObjectMeta: metav1.ObjectMeta{Name: "leaf", Namespace: "target"}, Spec: datasetv1alpha1.DatasetSpec{Source: datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeReference, URI: "dataset://middle/middle"}}}
+	unrelated := &datasetv1alpha1.Dataset{ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: "other"}, Spec: datasetv1alpha1.DatasetSpec{Source: datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeReference, URI: "dataset://other/root"}}}
+	reconciler := &DatasetReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(source, middle, leaf, unrelated).Build(), Scheme: scheme}
+
+	requests := reconciler.enqueueReferenceDatasets(context.Background(), source)
+	require.ElementsMatch(t, []client.ObjectKey{{Namespace: "middle", Name: "middle"}, {Namespace: "target", Name: "leaf"}}, requestKeys(requests))
+
+	requests = reconciler.enqueueReferenceDatasets(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "target"}})
+	require.Equal(t, []client.ObjectKey{{Namespace: "target", Name: "leaf"}}, requestKeys(requests))
+
+	oldDataset := source.DeepCopy()
+	newDataset := source.DeepCopy()
+	require.False(t, dependencyDatasetChanged(event.UpdateEvent{ObjectOld: oldDataset, ObjectNew: newDataset}))
+	newDataset.Status.PVCName = "source-pvc"
+	require.True(t, dependencyDatasetChanged(event.UpdateEvent{ObjectOld: oldDataset, ObjectNew: newDataset}))
+}
+
+func requestKeys(requests []reconcile.Request) []client.ObjectKey {
+	keys := make([]client.ObjectKey, 0, len(requests))
+	for _, request := range requests {
+		keys = append(keys, request.NamespacedName)
+	}
+	return keys
+}
 func TestDatasetReconciler_reconcileCascadingDeletion_Disabled(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, datasetv1alpha1.AddToScheme(scheme))
@@ -724,4 +759,77 @@ func TestDatasetReconciler_validateManualURI(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDatasetReconciler_reconcileMountPolicyStoresEffectivePermissions(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	require.NoError(t, datasetv1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	rootUID := types.UID("root-uid")
+	rootPVCUID := types.UID("root-pvc-uid")
+	rootPVUID := types.UID("root-pv-uid")
+	refUID := types.UID("ref-uid")
+	refPVCUID := types.UID("ref-pvc-uid")
+	refPVUID := types.UID("ref-pv-uid")
+	root := &datasetv1alpha1.Dataset{
+		ObjectMeta: metav1.ObjectMeta{Name: "root", Namespace: "root", UID: rootUID},
+		Spec: datasetv1alpha1.DatasetSpec{
+			Share: true,
+			ShareAccess: &datasetv1alpha1.ShareAccess{Rules: []datasetv1alpha1.ShareAccessRule{{
+				NamespaceSelector: metav1.LabelSelector{MatchLabels: map[string]string{"workspace": "one"}},
+				AccessMode:        datasetv1alpha1.AccessModeReadWrite,
+			}}},
+			Source: datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeManual, URI: "manual://"},
+		},
+		Status: datasetv1alpha1.DatasetStatus{PVCName: "root-pvc"},
+	}
+	rootPVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "root-pvc", Namespace: "root", UID: rootPVCUID},
+		Spec:       corev1.PersistentVolumeClaimSpec{VolumeName: "root-pv"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	rootPV := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "root-pv", UID: rootPVUID},
+		Spec: corev1.PersistentVolumeSpec{
+			ClaimRef:               &corev1.ObjectReference{Namespace: "root", Name: "root-pvc", UID: rootPVCUID},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{NFS: &corev1.NFSVolumeSource{Server: "nfs", Path: "/dataset"}},
+		},
+	}
+	ref := &datasetv1alpha1.Dataset{
+		ObjectMeta: metav1.ObjectMeta{Name: "ref", Namespace: "target", UID: refUID, Generation: 3},
+		Spec: datasetv1alpha1.DatasetSpec{Source: datasetv1alpha1.DatasetSource{
+			Type: datasetv1alpha1.DatasetTypeReference,
+			URI:  "dataset://root/root",
+		}},
+		Status: datasetv1alpha1.DatasetStatus{PVCName: "ref-pvc"},
+	}
+	owner := *metav1.NewControllerRef(ref, datasetv1alpha1.GroupVersion.WithKind("Dataset"))
+	refPVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "ref-pvc", Namespace: "target", UID: refPVCUID, OwnerReferences: []metav1.OwnerReference{owner}},
+		Spec:       corev1.PersistentVolumeClaimSpec{VolumeName: "ref-pv"},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	refPV := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "ref-pv", UID: refPVUID, OwnerReferences: []metav1.OwnerReference{owner}, Annotations: map[string]string{
+			mountpolicy.SourceDatasetUIDAnnotation: string(rootUID),
+			mountpolicy.SourcePVCUIDAnnotation:     string(rootPVCUID),
+			mountpolicy.SourcePVUIDAnnotation:      string(rootPVUID),
+		}},
+		Spec: corev1.PersistentVolumeSpec{
+			ClaimRef:               &corev1.ObjectReference{Namespace: "target", Name: "ref-pvc", UID: refPVCUID},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{NFS: &corev1.NFSVolumeSource{Server: "nfs", Path: "/dataset"}},
+		},
+	}
+	workspace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "target", Labels: map[string]string{"workspace": "one"}}}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(root, rootPVC, rootPV, refPVC, refPV, workspace).Build()
+	reconciler := &DatasetReconciler{Client: fakeClient, Scheme: scheme}
+
+	require.NoError(t, reconciler.reconcileMountPolicy(ctx, ref))
+	reconciler.setMountPolicyCondition(ref, nil)
+	require.False(t, ref.Status.ReadOnly)
+	require.Equal(t, []datasetv1alpha1.MountSource{{Namespace: "root", Name: "root", UID: string(rootUID), PVCName: "root-pvc", PVCUID: string(rootPVCUID), PVName: "root-pv", PVUID: string(rootPVUID)}}, ref.Status.MountSources)
+	require.True(t, kubeutils.IsConditionReady(ref.Status.Conditions, condTypeMountPolicy))
+	require.Equal(t, int64(3), ref.Status.Conditions[0].ObservedGeneration)
 }

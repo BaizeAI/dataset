@@ -158,6 +158,86 @@ spec:
                   Share indicates whether the model is shareable with others.
                   When set to true, the model can be shared according to the specified selector.
                 type: boolean
+              shareAccess:
+                description: |-
+                  ShareAccess assigns the effective access mode to namespaces which consume
+                  this Dataset through a REFERENCE Dataset. A nil value is intentionally
+                  distinct from an empty value: nil preserves the legacy read-only sharing
+                  behaviour.
+                properties:
+                  rules:
+                    items:
+                      properties:
+                        accessMode:
+                          description: |-
+                            AccessMode is the access granted to a namespace which references a Dataset.
+                            It deliberately describes a per-reference mount policy, not the access mode
+                            of the backing PersistentVolume.
+                          enum:
+                          - ReadOnly
+                          - ReadWrite
+                          type: string
+                        namespaceSelector:
+                          description: |-
+                            NamespaceSelector selects target namespaces. Empty selectors are not valid:
+                            an explicit rule must name at least one label requirement.
+                          properties:
+                            matchExpressions:
+                              description: matchExpressions is a list of label selector
+                                requirements. The requirements are ANDed.
+                              items:
+                                description: |-
+                                  A label selector requirement is a selector that contains values, a key, and an operator that
+                                  relates the key and values.
+                                properties:
+                                  key:
+                                    description: key is the label key that the selector
+                                      applies to.
+                                    type: string
+                                  operator:
+                                    description: |-
+                                      operator represents a key's relationship to a set of values.
+                                      Valid operators are In, NotIn, Exists and DoesNotExist.
+                                    type: string
+                                  values:
+                                    description: |-
+                                      values is an array of string values. If the operator is In or NotIn,
+                                      the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                      the values array must be empty. This array is replaced during a strategic
+                                      merge patch.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                required:
+                                - key
+                                - operator
+                                type: object
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            matchLabels:
+                              additionalProperties:
+                                type: string
+                              description: |-
+                                matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                operator is "In", and the values array contains only "value". The requirements are ANDed.
+                              type: object
+                          type: object
+                          x-kubernetes-map-type: atomic
+                          x-kubernetes-validations:
+                          - message: namespaceSelector must not be empty
+                            rule: size(self.matchLabels) > 0 || size(self.matchExpressions)
+                              > 0
+                      required:
+                      - accessMode
+                      - namespaceSelector
+                      type: object
+                    minItems: 1
+                    type: array
+                required:
+                - rules
+                type: object
               shareToNamespaceSelector:
                 description: |-
                   ShareToNamespaceSelector defines a label selector to specify the namespaces
@@ -401,7 +481,7 @@ spec:
                       resources:
                         description: |-
                           resources represents the minimum resources the volume should have.
-                          If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
+                          Users are allowed to specify resource requirements
                           that are lower than previous value but must still be higher than capacity recorded in the
                           status field of the claim.
                           More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
@@ -558,8 +638,7 @@ spec:
                           for the purpose it was designed. For example - a controller
                           that\nonly is responsible for resizing capacity of the volume,
                           should ignore PVC updates that change other valid\nresources
-                          associated with PVC.\n\nThis is an alpha field and requires
-                          enabling RecoverVolumeExpansionFailure feature."
+                          associated with PVC."
                         type: object
                         x-kubernetes-map-type: granular
                       allocatedResources:
@@ -590,8 +669,7 @@ spec:
                           for the purpose it was designed. For example - a controller
                           that\nonly is responsible for resizing capacity of the volume,
                           should ignore PVC updates that change other valid\nresources
-                          associated with PVC.\n\nThis is an alpha field and requires
-                          enabling RecoverVolumeExpansionFailure feature."
+                          associated with PVC."
                         type: object
                       capacity:
                         additionalProperties:
@@ -690,6 +768,13 @@ spec:
             required:
             - source
             type: object
+            x-kubernetes-validations:
+            - message: shareAccess is immutable and cannot be added or removed
+              rule: oldSelf == null || (has(self.shareAccess) == has(oldSelf.shareAccess)
+                && (!has(self.shareAccess) || self.shareAccess == oldSelf.shareAccess))
+            - message: shareAccess.rules must contain at least one rule when shareAccess
+                is configured
+              rule: '!has(self.shareAccess) || size(self.shareAccess.rules) > 0'
           status:
             description: DatasetStatus defines the observed state of Dataset
             properties:
@@ -762,6 +847,43 @@ spec:
               lastSyncTime:
                 format: date-time
                 type: string
+              mountSources:
+                description: |-
+                  mountSources is the direct-to-root source chain from the last successful
+                  MountPolicy resolution for a REFERENCE Dataset. It deliberately excludes this
+                  Dataset's own PVC; that PVC is checked from status.pvcName at verification time.
+                  A MountPolicy=False condition retains this binding as an anti-rebind identity pin;
+                  consumers must never treat it as current authorization.
+                items:
+                  description: |-
+                    MountSource pins every Dataset and storage object used by a reference mount.
+                    Consumers must verify these identities before treating ReadOnly=false as a
+                    writable mount.
+                  properties:
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                    pvName:
+                      type: string
+                    pvUID:
+                      type: string
+                    pvcName:
+                      type: string
+                    pvcUID:
+                      type: string
+                    uid:
+                      type: string
+                  required:
+                  - name
+                  - namespace
+                  - pvName
+                  - pvUID
+                  - pvcName
+                  - pvcUID
+                  - uid
+                  type: object
+                type: array
               phase:
                 default: PENDING
                 type: string

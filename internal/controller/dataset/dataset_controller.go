@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/BaizeAI/dataset/pkg/kubeutils"
-	"k8s.io/apimachinery/pkg/labels"
+	"github.com/BaizeAI/dataset/pkg/mountpolicy"
 
 	"github.com/samber/lo"
 	batchv1 "k8s.io/api/batch/v1"
@@ -44,7 +44,12 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	datasetv1alpha1 "github.com/BaizeAI/dataset/api/dataset/v1alpha1"
 )
@@ -53,11 +58,12 @@ const (
 	datasetFinalizer = "dataset-controller"
 	keepConditions   = 5
 
-	condTypeConfig    = "Config"
-	condTypePVC       = "PVC"
-	condTypeJobStatus = "JobStatus"
-	condTypeJob       = "Job"
-	condTypeConfigMap = "ConfigMap"
+	condTypeConfig      = "Config"
+	condTypePVC         = "PVC"
+	condTypeJobStatus   = "JobStatus"
+	condTypeJob         = "Job"
+	condTypeConfigMap   = "ConfigMap"
+	condTypeMountPolicy = mountpolicy.MountPolicyCondition
 
 	nfsPersistentVolumeTemplate = `
 apiVersion: v1
@@ -91,7 +97,7 @@ type reconciler struct {
 //+kubebuilder:rbac:groups=dataset.baizeai.io,resources=datasets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=dataset.baizeai.io,resources=datasets/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=dataset.baizeai.io,resources=datasets/finalizers,verbs=update
-//+kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch;delete
+//+kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch;create;delete
 //+kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 
@@ -119,6 +125,7 @@ func (r *DatasetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			{typ: condTypeConfig, rec: r.validate},
 			{typ: "", rec: r.reconcileFinalizer},
 			{typ: condTypePVC, rec: r.reconcilePVC},
+			{typ: condTypeMountPolicy, rec: r.reconcileMountPolicy},
 			{typ: condTypeConfigMap, rec: r.reconcileConfigMap},
 			{typ: condTypeJob, rec: r.reconcileJob},
 			{typ: condTypeJobStatus, rec: r.reconcileJobStatus},
@@ -128,7 +135,19 @@ func (r *DatasetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	for _, rr := range reconcilers {
 		log.Debugf("start reconciling dataset for %s/%s: %+v...", ds.Namespace, ds.Name, rr)
 		err := rr.rec(ctx, ds)
-		ds.Status.Conditions = kubeutils.SetCondition(ds.Status.Conditions, rr.typ, err)
+		if rr.typ == condTypeMountPolicy {
+			if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeReference {
+				r.setMountPolicyCondition(ds, err)
+			}
+		} else {
+			ds.Status.Conditions = kubeutils.SetCondition(ds.Status.Conditions, rr.typ, err)
+			// A failed step before MountPolicy must invalidate an older success
+			// condition; otherwise stale status.ReadOnly=false could be mistaken
+			// for authorization by an older consumer.
+			if err != nil && ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeReference && !kubeutils.IsDeleted(ds) {
+				r.setMountPolicyCondition(ds, err)
+			}
+		}
 		if err != nil {
 			log.Errorf("error reconciling dataset for %s/%s: %v", ds.Namespace, ds.Name, err)
 			break
@@ -152,6 +171,12 @@ func (r *DatasetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
+	// REFERENCE datasets periodically re-resolve their source chain. Watches
+	// make normal updates prompt, while this is the recovery path for missed
+	// events and for a reference which entered Failed before its source existed.
+	if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeReference {
+		return res30sec, nil
+	}
 	switch ds.Status.Phase {
 	case datasetv1alpha1.DatasetStatusPhaseReady, datasetv1alpha1.DatasetStatusPhaseFailed:
 		return resOk, nil
@@ -228,18 +253,11 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 	switch ds.Spec.Source.Type {
 	case datasetv1alpha1.DatasetTypeReference:
 		if kubeutils.IsDeleted(ds) {
-			// Enhanced cleanup for reference datasets - also handle retained PVs
 			if config.IsCascadingDeletionEnabled() {
-				// Find and delete the associated retained PV
 				if err := r.cleanupRetainedPV(ctx, ds); err != nil {
-					log.Errorf("Failed to cleanup retained PV for dataset %s/%s: %v", ds.Namespace, ds.Name, err)
-					// Don't fail the deletion process if PV cleanup fails
+					log.Errorf("cleanup retained pv for reference dataset %s/%s: %v", ds.Namespace, ds.Name, err)
 				}
 			}
-			// OwnerReference 会将其自动回收，这里不做额外 Delete
-			return nil
-		}
-		if kubeutils.IsConditionReady(ds.Status.Conditions, condTypePVC) {
 			return nil
 		}
 		srcDs, err := r.getSourceDataset(ctx, ds)
@@ -249,50 +267,62 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 		if srcDs.Status.PVCName == "" {
 			return fmt.Errorf("source dataset %s/%s has no pvc", srcDs.Namespace, srcDs.Name)
 		}
-		// 先获取 source dataset 的 pvc
-		pvc := &corev1.PersistentVolumeClaim{}
-		err = r.Get(ctx, client.ObjectKey{Namespace: srcDs.Namespace, Name: srcDs.Status.PVCName}, pvc)
-		if err != nil {
-			return fmt.Errorf("get pvc %s/%s for source dataset %s/%s error: %v",
-				srcDs.Namespace, srcDs.Status.PVCName,
-				srcDs.Namespace, srcDs.Name, err)
+		sourcePVC := &corev1.PersistentVolumeClaim{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: srcDs.Namespace, Name: srcDs.Status.PVCName}, sourcePVC); err != nil {
+			return fmt.Errorf("get source pvc %s/%s: %w", srcDs.Namespace, srcDs.Status.PVCName, err)
 		}
-		if pvc.Spec.VolumeName == "" {
-			return fmt.Errorf("pvc %s/%s has no volume", pvc.Namespace, pvc.Name)
+		if sourcePVC.Status.Phase != corev1.ClaimBound || sourcePVC.Spec.VolumeName == "" {
+			return fmt.Errorf("source pvc %s/%s is not bound", sourcePVC.Namespace, sourcePVC.Name)
 		}
-		// 再获取 source dataset pvc 对应的 pv
-		pv := &corev1.PersistentVolume{}
-		err = r.Get(ctx, client.ObjectKey{Name: pvc.Spec.VolumeName}, pv)
-		if err != nil {
-			return fmt.Errorf("get pv %s for source dataset %s/%s error: %v",
-				pvc.Spec.VolumeName, srcDs.Namespace, srcDs.Name, err)
+		sourcePV := &corev1.PersistentVolume{}
+		if err := r.Get(ctx, client.ObjectKey{Name: sourcePVC.Spec.VolumeName}, sourcePV); err != nil {
+			return fmt.Errorf("get source pv %s: %w", sourcePVC.Spec.VolumeName, err)
 		}
-		// 克隆一个新的 pv 给当前 ds
-		newPv := pv.DeepCopy()
-		newPv.OwnerReferences = datasetOwnerRef(ds)
-		newPv.Name = fmt.Sprintf("dataset-%s-%s-%s", ds.Namespace, ds.Name, ds.UID[:12])
-		if newPv.Labels == nil {
-			newPv.Labels = make(map[string]string)
+		if sourcePV.Spec.ClaimRef == nil || sourcePV.Spec.ClaimRef.Namespace != sourcePVC.Namespace || sourcePV.Spec.ClaimRef.Name != sourcePVC.Name || sourcePV.Spec.ClaimRef.UID != sourcePVC.UID {
+			return fmt.Errorf("source pv %s is not bound to pvc %s/%s", sourcePV.Name, sourcePVC.Namespace, sourcePVC.Name)
 		}
-		newPv.Labels[constants.DatasetNameLabel] = ds.Name
-		newPv.ResourceVersion = ""
-		newPv.Spec.ClaimRef = nil
-		// 保留策略改为 Retain
-		newPv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
-		if err := r.Get(ctx, client.ObjectKey{Name: newPv.Name}, pv); err != nil {
+
+		pvName := referencePVName(ds)
+		existingPV := &corev1.PersistentVolume{}
+		if err := r.Get(ctx, client.ObjectKey{Name: pvName}, existingPV); err != nil {
 			if !k8serrors.IsNotFound(err) {
 				return err
 			}
-			if err := r.Create(ctx, newPv); err != nil {
+			newPV := sourcePV.DeepCopy()
+			newPV.ObjectMeta = metav1.ObjectMeta{
+				Name:            pvName,
+				Labels:          copyStringMap(sourcePV.Labels),
+				Annotations:     copyStringMap(sourcePV.Annotations),
+				OwnerReferences: datasetOwnerRef(ds),
+			}
+			if newPV.Labels == nil {
+				newPV.Labels = map[string]string{}
+			}
+			newPV.Labels[constants.DatasetNameLabel] = ds.Name
+			if newPV.Annotations == nil {
+				newPV.Annotations = map[string]string{}
+			}
+			newPV.Annotations[mountpolicy.SourceDatasetUIDAnnotation] = string(srcDs.UID)
+			newPV.Annotations[mountpolicy.SourcePVCUIDAnnotation] = string(sourcePVC.UID)
+			newPV.Annotations[mountpolicy.SourcePVUIDAnnotation] = string(sourcePV.UID)
+			newPV.Spec.ClaimRef = nil
+			newPV.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+			newPV.Status = corev1.PersistentVolumeStatus{}
+			if err := r.Create(ctx, newPV); err != nil {
 				return err
 			}
+		} else {
+			if existingPV.Labels[constants.DatasetNameLabel] != ds.Name ||
+				existingPV.Annotations[mountpolicy.SourceDatasetUIDAnnotation] != string(srcDs.UID) ||
+				existingPV.Annotations[mountpolicy.SourcePVCUIDAnnotation] != string(sourcePVC.UID) ||
+				existingPV.Annotations[mountpolicy.SourcePVUIDAnnotation] != string(sourcePV.UID) ||
+				!reflect.DeepEqual(existingPV.Spec.PersistentVolumeSource, sourcePV.Spec.PersistentVolumeSource) {
+				return fmt.Errorf("reference pv %s does not match its source binding", existingPV.Name)
+			}
 		}
-		spec = pvc.Spec.DeepCopy()
-		spec.VolumeName = newPv.Name
-
-		// 标记当前 dataset 状态
+		spec = sourcePVC.Spec.DeepCopy()
+		spec.VolumeName = pvName
 		ds.Status.LastSucceedRound = ds.Spec.DataSyncRound
-		ds.Status.ReadOnly = true
 
 	case datasetv1alpha1.DatasetTypePVC:
 		u, err := url.Parse(ds.Spec.Source.URI)
@@ -501,8 +531,15 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 }
 
 func (r *DatasetReconciler) reconcileClaimPVC(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
+	protected, err := mountpolicy.ProtectedPVC(ctx, r.Client, ds.Namespace, ds.Spec.VolumeClaimRef.Name)
+	if err != nil {
+		return err
+	}
+	if protected {
+		return fmt.Errorf("pvc %s/%s is managed by a REFERENCE dataset; use the dataset reference instead", ds.Namespace, ds.Spec.VolumeClaimRef.Name)
+	}
 	var pvc corev1.PersistentVolumeClaim
-	err := r.Get(ctx, client.ObjectKey{Namespace: ds.Namespace, Name: ds.Spec.VolumeClaimRef.Name}, &pvc)
+	err = r.Get(ctx, client.ObjectKey{Namespace: ds.Namespace, Name: ds.Spec.VolumeClaimRef.Name}, &pvc)
 	if err != nil {
 		return fmt.Errorf("get pvc %s/%s for dataset %s/%s error: %v", ds.Namespace, ds.Spec.VolumeClaimRef.Name, ds.Namespace, ds.Name, err)
 	}
@@ -911,6 +948,89 @@ func (r *DatasetReconciler) reconcileJobStatus(ctx context.Context, ds *datasetv
 	return nil
 }
 
+func (r *DatasetReconciler) reconcileMountPolicy(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
+	if ds.Spec.Source.Type != datasetv1alpha1.DatasetTypeReference || kubeutils.IsDeleted(ds) {
+		return nil
+	}
+	resolution, err := mountpolicy.Resolve(ctx, r.Client, ds)
+	if err != nil {
+		return err
+	}
+	bindings, err := mountpolicy.Bindings(ctx, r.Client, resolution.Sources)
+	if err != nil {
+		return err
+	}
+	// Once a reference has been pinned, a same-name source recreation is not a
+	// rebind operation. It must be rejected and recreated explicitly by the
+	// user, rather than silently granting a different backing volume.
+	if len(ds.Status.MountSources) != 0 && !reflect.DeepEqual(ds.Status.MountSources, bindings) {
+		return fmt.Errorf("reference mount sources no longer match their recorded identities")
+	}
+	if err := mountpolicy.VerifyPVCBinding(ctx, r.Client, ds, resolution.Sources[0], bindings[0]); err != nil {
+		return err
+	}
+	ds.Status.ReadOnly = resolution.ReadOnly
+	ds.Status.MountSources = bindings
+	return nil
+}
+
+func (r *DatasetReconciler) setMountPolicyCondition(ds *datasetv1alpha1.Dataset, err error) {
+	status := metav1.ConditionTrue
+	reason := "MountPolicyResolved"
+	message := ""
+	if err != nil {
+		status = metav1.ConditionFalse
+		reason = "MountPolicyDenied"
+		message = err.Error()
+		// Keep the stored boolean conservative for older consumers too. New
+		// consumers must still require the current-generation condition.
+		ds.Status.ReadOnly = true
+	}
+	for i := range ds.Status.Conditions {
+		condition := &ds.Status.Conditions[i]
+		if condition.Type != condTypeMountPolicy {
+			continue
+		}
+		if condition.Status != status {
+			condition.LastTransitionTime = metav1.Now()
+		}
+		condition.Status = status
+		condition.Reason = reason
+		condition.Message = message
+		condition.ObservedGeneration = ds.Generation
+		return
+	}
+	ds.Status.Conditions = append(ds.Status.Conditions, metav1.Condition{
+		Type:               condTypeMountPolicy,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: ds.Generation,
+		LastTransitionTime: metav1.Now(),
+	})
+}
+
+func referencePVName(ds *datasetv1alpha1.Dataset) string {
+	uid := string(ds.UID)
+	if len(uid) > 12 {
+		uid = uid[:12]
+	}
+	if uid == "" {
+		uid = "pending"
+	}
+	return fmt.Sprintf("dataset-%s-%s-%s", ds.Namespace, ds.Name, uid)
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
 func (r *DatasetReconciler) reconcilePhase(_ context.Context, ds *datasetv1alpha1.Dataset) error {
 	var phase datasetv1alpha1.DatasetStatusPhase
 	switch ds.Spec.Source.Type {
@@ -921,6 +1041,12 @@ func (r *DatasetReconciler) reconcilePhase(_ context.Context, ds *datasetv1alpha
 			ds.Status.Phase = datasetv1alpha1.DatasetStatusPhaseFailed
 			return nil
 		}
+		if ds.Status.PVCName == "" || !kubeutils.IsConditionReady(ds.Status.Conditions, condTypePVC) || !kubeutils.IsConditionReady(ds.Status.Conditions, condTypeMountPolicy) {
+			ds.Status.Phase = datasetv1alpha1.DatasetStatusPhasePending
+		} else {
+			ds.Status.Phase = datasetv1alpha1.DatasetStatusPhaseReady
+		}
+		return nil
 	case datasetv1alpha1.DatasetTypeManual:
 		if _, ok := lo.Find(ds.Status.Conditions, func(c metav1.Condition) bool {
 			return c.Status == metav1.ConditionFalse
@@ -952,12 +1078,12 @@ func (r *DatasetReconciler) reconcilePhase(_ context.Context, ds *datasetv1alpha
 }
 
 func (r *DatasetReconciler) getSourceDataset(ctx context.Context, ds *datasetv1alpha1.Dataset) (*datasetv1alpha1.Dataset, error) {
-	u, err := url.Parse(ds.Spec.Source.URI)
+	key, err := mountpolicy.ParseReference(ds.Spec.Source.URI)
 	if err != nil {
 		return nil, err
 	}
 	sourceDs := &datasetv1alpha1.Dataset{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: u.Host, Name: strings.Trim(u.Path, "/")}, sourceDs); err != nil {
+	if err := r.Get(ctx, key, sourceDs); err != nil {
 		return nil, fmt.Errorf("fetch source dataset %s error: %v", ds.Spec.Source.URI, err)
 	}
 	return sourceDs, nil
@@ -967,36 +1093,25 @@ func (r *DatasetReconciler) validate(ctx context.Context, ds *datasetv1alpha1.Da
 	if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeManual && ds.Spec.Source.URI != "manual://" {
 		return fmt.Errorf("MANUAL dataset source URI must be manual://")
 	}
-
+	if err := mountpolicy.Validate(ds); err != nil {
+		return err
+	}
 	if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeReference {
-		sourceDs, err := r.getSourceDataset(ctx, ds)
-		if err != nil {
+		if _, err := mountpolicy.Resolve(ctx, r.Client, ds); err != nil {
 			return err
 		}
-		if !sourceDs.Spec.Share {
-			return fmt.Errorf("source dataset %s is not shared", ds.Spec.Source.URI)
-		}
-		if sourceDs.Spec.ShareToNamespaceSelector != nil {
-			// 获取当前 Dataset 所在的 Namespace
-			currNS := &corev1.Namespace{}
-			if err := r.Get(ctx, client.ObjectKey{Name: ds.Namespace}, currNS); err != nil {
-				return fmt.Errorf("fetch current namespace %s error: %v", ds.Namespace, err)
-			}
-			s, err := metav1.LabelSelectorAsSelector(sourceDs.Spec.ShareToNamespaceSelector)
-			if err != nil {
-				return fmt.Errorf("parse share to namespace selector error: %v", err)
-			}
-			if !s.Matches(labels.Set(currNS.Labels)) {
-				return fmt.Errorf("source dataset %s is not shared to current namespace", ds.Spec.Source.URI)
-			}
-		}
 	}
-
 	if ds.Spec.VolumeClaimRef != nil && !reflect.DeepEqual(ds.Spec.VolumeClaimTemplate, corev1.PersistentVolumeClaim{}) {
 		return fmt.Errorf("volumeClaimRef and volumeClaimTemplate cannot be both set")
 	}
-
 	if ds.Spec.VolumeClaimRef != nil {
+		protected, err := mountpolicy.ProtectedPVC(ctx, r.Client, ds.Namespace, ds.Spec.VolumeClaimRef.Name)
+		if err != nil {
+			return err
+		}
+		if protected {
+			return fmt.Errorf("pvc %s/%s is managed by a REFERENCE dataset; use the dataset reference instead", ds.Namespace, ds.Spec.VolumeClaimRef.Name)
+		}
 		if ds.Spec.VolumeClaimRef.SubPath != "" {
 			if strings.HasPrefix(ds.Spec.VolumeClaimRef.SubPath, "/") {
 				return fmt.Errorf("subPath should not start with '/', got: %s", ds.Spec.VolumeClaimRef.SubPath)
@@ -1006,10 +1121,21 @@ func (r *DatasetReconciler) validate(ctx context.Context, ds *datasetv1alpha1.Da
 			}
 		}
 	}
-
+	if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypePVC {
+		u, err := url.Parse(ds.Spec.Source.URI)
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("invalid PVC dataset uri %q", ds.Spec.Source.URI)
+		}
+		protected, err := mountpolicy.ProtectedPVC(ctx, r.Client, ds.Namespace, u.Host)
+		if err != nil {
+			return err
+		}
+		if protected {
+			return fmt.Errorf("pvc %s/%s is managed by a REFERENCE dataset; use the dataset reference instead", ds.Namespace, u.Host)
+		}
+	}
 	return nil
 }
-
 func (r *DatasetReconciler) reconcileCascadingDeletion(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
 	// Only perform cascading deletion if enabled in configuration
 	if !config.IsCascadingDeletionEnabled() {
@@ -1066,7 +1192,7 @@ func (r *DatasetReconciler) findReferencingDatasets(ctx context.Context, sourceD
 func (r *DatasetReconciler) cleanupRetainedPV(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
 	// For reference datasets, look for PVs that were created for this dataset
 	// They follow the naming pattern: dataset-{namespace}-{name}-{uid-prefix}
-	pvName := fmt.Sprintf("dataset-%s-%s-%s", ds.Namespace, ds.Name, ds.UID[:12])
+	pvName := referencePVName(ds)
 
 	pv := &corev1.PersistentVolume{}
 	err := r.Get(ctx, client.ObjectKey{Name: pvName}, pv)
@@ -1092,9 +1218,87 @@ func (r *DatasetReconciler) cleanupRetainedPV(ctx context.Context, ds *datasetv1
 	return nil
 }
 
+func (r *DatasetReconciler) enqueueReferenceDatasets(ctx context.Context, object client.Object) []reconcile.Request {
+	list := &datasetv1alpha1.DatasetList{}
+	if err := r.List(ctx, list); err != nil {
+		log.Errorf("list reference datasets for policy requeue: %v", err)
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0)
+	seen := make(map[client.ObjectKey]struct{})
+	appendRequest := func(key client.ObjectKey) {
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		requests = append(requests, reconcile.Request{NamespacedName: key})
+	}
+
+	switch changed := object.(type) {
+	case *corev1.Namespace:
+		// Namespace labels affect only references whose final target is this namespace.
+		for i := range list.Items {
+			ds := &list.Items[i]
+			if ds.Namespace == changed.Name && ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeReference && !kubeutils.IsDeleted(ds) {
+				appendRequest(client.ObjectKeyFromObject(ds))
+			}
+		}
+		return requests
+	case *datasetv1alpha1.Dataset:
+		// Walk the reverse reference graph so source changes reach direct and
+		// transitive dependents without requeueing unrelated references.
+		reverse := make(map[client.ObjectKey][]client.ObjectKey)
+		for i := range list.Items {
+			ds := &list.Items[i]
+			if ds.Spec.Source.Type != datasetv1alpha1.DatasetTypeReference || kubeutils.IsDeleted(ds) {
+				continue
+			}
+			source, err := mountpolicy.ParseReference(ds.Spec.Source.URI)
+			if err != nil {
+				continue
+			}
+			reverse[source] = append(reverse[source], client.ObjectKeyFromObject(ds))
+		}
+
+		queue := []client.ObjectKey{client.ObjectKeyFromObject(changed)}
+		visited := make(map[client.ObjectKey]struct{})
+		for len(queue) > 0 {
+			key := queue[0]
+			queue = queue[1:]
+			if _, ok := visited[key]; ok {
+				continue
+			}
+			visited[key] = struct{}{}
+			for _, dependent := range reverse[key] {
+				appendRequest(dependent)
+				queue = append(queue, dependent)
+			}
+		}
+		return requests
+	default:
+		return nil
+	}
+}
+
+func dependencyDatasetChanged(update event.UpdateEvent) bool {
+	oldDataset, oldOK := update.ObjectOld.(*datasetv1alpha1.Dataset)
+	newDataset, newOK := update.ObjectNew.(*datasetv1alpha1.Dataset)
+	if !oldOK || !newOK {
+		return true
+	}
+	// Generation tracks policy and source-spec changes. PVCName is status data
+	// that determines whether a waiting reference can construct its clone.
+	return oldDataset.Generation != newDataset.Generation || oldDataset.Status.PVCName != newDataset.Status.PVCName
+
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *DatasetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&datasetv1alpha1.Dataset{}).
+		// Source policy/storage and target namespace label changes invalidate references.
+		Watches(&datasetv1alpha1.Dataset{}, handler.EnqueueRequestsFromMapFunc(r.enqueueReferenceDatasets), builder.WithPredicates(predicate.Funcs{UpdateFunc: dependencyDatasetChanged})).
+		Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(r.enqueueReferenceDatasets), builder.WithPredicates(predicate.LabelChangedPredicate{})).
 		Complete(r)
 }

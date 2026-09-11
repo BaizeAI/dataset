@@ -24,6 +24,11 @@ import (
 type DatasetStatusPhase string
 type DatasetType string
 
+// AccessMode is the access granted to a namespace which references a Dataset.
+// It deliberately describes a per-reference mount policy, not the access mode
+// of the backing PersistentVolume.
+type AccessMode string
+
 const (
 	DatasetTypeGit         DatasetType = "GIT"
 	DatasetTypeS3          DatasetType = "S3"
@@ -49,6 +54,11 @@ const (
 	_ = DatasetStatusPhaseReady
 	_ = DatasetStatusPhaseProcessing
 	_ = DatasetStatusPhaseFailed
+)
+
+const (
+	AccessModeReadOnly  AccessMode = "ReadOnly"
+	AccessModeReadWrite AccessMode = "ReadWrite"
 )
 
 type DatasetSource struct {
@@ -116,6 +126,8 @@ type MountOptions struct {
 }
 
 // DatasetSpec defines the desired state of Dataset
+// +kubebuilder:validation:XValidation:rule="oldSelf == null || (has(self.shareAccess) == has(oldSelf.shareAccess) && (!has(self.shareAccess) || self.shareAccess == oldSelf.shareAccess))",message="shareAccess is immutable and cannot be added or removed"
+// +kubebuilder:validation:XValidation:rule="!has(self.shareAccess) || size(self.shareAccess.rules) > 0",message="shareAccess.rules must contain at least one rule when shareAccess is configured"
 type DatasetSpec struct {
 	// Share indicates whether the model is shareable with others.
 	// When set to true, the model can be shared according to the specified selector.
@@ -126,6 +138,12 @@ type DatasetSpec struct {
 	// If Share is true and ShareToNamespaceSelector is empty, that means all namespaces can access this.
 	// +kubebuilder:validation:Optional
 	ShareToNamespaceSelector *metav1.LabelSelector `json:"shareToNamespaceSelector,omitempty"`
+	// ShareAccess assigns the effective access mode to namespaces which consume
+	// this Dataset through a REFERENCE Dataset. A nil value is intentionally
+	// distinct from an empty value: nil preserves the legacy read-only sharing
+	// behaviour.
+	// +kubebuilder:validation:Optional
+	ShareAccess *ShareAccess `json:"shareAccess,omitempty"`
 	// +kubebuilder:validation:Required
 	// source is the source of the dataset.
 	Source DatasetSource `json:"source"`
@@ -148,6 +166,22 @@ type DatasetSpec struct {
 	// DataWarmUpResources is the resources required for data warmUp.
 	// +kubebuilder:validation:Optional
 	DataWarmUpResources v1.ResourceRequirements `json:"resources,omitempty"`
+}
+
+// ShareAccess describes the namespace based access policy for a shared Dataset.
+type ShareAccess struct {
+	// +kubebuilder:validation:MinItems=1
+	Rules []ShareAccessRule `json:"rules"`
+}
+
+type ShareAccessRule struct {
+	// NamespaceSelector selects target namespaces. Empty selectors are not valid:
+	// an explicit rule must name at least one label requirement.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="size(self.matchLabels) > 0 || size(self.matchExpressions) > 0",message="namespaceSelector must not be empty"
+	NamespaceSelector metav1.LabelSelector `json:"namespaceSelector"`
+	// +kubebuilder:validation:Enum=ReadOnly;ReadWrite
+	AccessMode AccessMode `json:"accessMode"`
 }
 
 type VolumeClaimRef struct {
@@ -197,8 +231,27 @@ type DatasetStatus struct {
 	PVCName string `json:"pvcName,omitempty"`
 	// +kubebuilder:validation:Optional
 	// readOnly indicates whether the dataset is mounted as read-only.
-	ReadOnly     bool        `json:"readOnly,omitempty"`
-	LastSyncTime metav1.Time `json:"lastSyncTime,omitempty"`
+	ReadOnly bool `json:"readOnly,omitempty"`
+	// mountSources is the direct-to-root source chain from the last successful
+	// MountPolicy resolution for a REFERENCE Dataset. It deliberately excludes this
+	// Dataset's own PVC; that PVC is checked from status.pvcName at verification time.
+	// A MountPolicy=False condition retains this binding as an anti-rebind identity pin;
+	// consumers must never treat it as current authorization.
+	MountSources []MountSource `json:"mountSources,omitempty"`
+	LastSyncTime metav1.Time   `json:"lastSyncTime,omitempty"`
+}
+
+// MountSource pins every Dataset and storage object used by a reference mount.
+// Consumers must verify these identities before treating ReadOnly=false as a
+// writable mount.
+type MountSource struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	UID       string `json:"uid"`
+	PVCName   string `json:"pvcName"`
+	PVCUID    string `json:"pvcUID"`
+	PVName    string `json:"pvName"`
+	PVUID     string `json:"pvUID"`
 }
 
 // Dataset is the Schema for the datasets API

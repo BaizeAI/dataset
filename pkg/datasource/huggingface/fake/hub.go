@@ -4,7 +4,7 @@ package fake
 import (
 	"context"
 	"sync"
-	
+
 	"github.com/BaizeAI/dataset/pkg/datasource/huggingface"
 )
 
