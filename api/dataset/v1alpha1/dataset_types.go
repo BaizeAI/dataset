@@ -126,7 +126,6 @@ type MountOptions struct {
 }
 
 // DatasetSpec defines the desired state of Dataset
-// +kubebuilder:validation:XValidation:rule="oldSelf == null || (has(self.shareAccess) == has(oldSelf.shareAccess) && (!has(self.shareAccess) || self.shareAccess == oldSelf.shareAccess))",message="shareAccess is immutable and cannot be added or removed"
 // +kubebuilder:validation:XValidation:rule="!has(self.shareAccess) || size(self.shareAccess.rules) > 0",message="shareAccess.rules must contain at least one rule when shareAccess is configured"
 type DatasetSpec struct {
 	// Share indicates whether the model is shareable with others.

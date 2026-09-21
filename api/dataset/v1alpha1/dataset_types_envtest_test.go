@@ -65,16 +65,16 @@ func TestShareAccessCRDValidation(t *testing.T) {
 		ds.Spec.Share = true
 		require.NoError(t, apiClient.Update(ctx, ds))
 	})
-	t.Run("rejects adding or changing a policy after creation", func(t *testing.T) {
+	t.Run("allows updating a policy after creation", func(t *testing.T) {
 		missing := newDataset("missing-policy")
 		require.NoError(t, apiClient.Create(ctx, missing))
 		missing.Spec.ShareAccess = &datasetv1alpha1.ShareAccess{Rules: []datasetv1alpha1.ShareAccessRule{validRule}}
-		require.Error(t, apiClient.Update(ctx, missing))
+		require.NoError(t, apiClient.Update(ctx, missing))
 
 		immutable := newDataset("immutable-policy")
 		immutable.Spec.ShareAccess = &datasetv1alpha1.ShareAccess{Rules: []datasetv1alpha1.ShareAccessRule{validRule}}
 		require.NoError(t, apiClient.Create(ctx, immutable))
 		immutable.Spec.ShareAccess.Rules[0].AccessMode = datasetv1alpha1.AccessModeReadWrite
-		require.Error(t, apiClient.Update(ctx, immutable))
+		require.NoError(t, apiClient.Update(ctx, immutable))
 	})
 }
