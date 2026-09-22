@@ -39,6 +39,7 @@ import (
 	"github.com/BaizeAI/dataset/internal/pkg/constants"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/BaizeAI/dataset/pkg/log"
 
@@ -112,6 +113,18 @@ func (r *DatasetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	prevStatus := ds.Status.DeepCopy()
+	// Cache the deterministic target PVC name before validation and external
+	// storage operations. A non-empty name identifies the intended PVC; the
+	// PVC condition still determines whether that PVC is usable.
+	if !kubeutils.IsDeleted(ds) {
+		if pvcName, nameErr := expectedPVCName(ds); nameErr == nil {
+			ds.Status.PVCName = pvcName
+		} else {
+			// Do not expose a stale target when the current immutable source
+			// cannot be mapped to a valid PVC name.
+			ds.Status.PVCName = ""
+		}
+	}
 	var reconcilers []reconciler
 	if kubeutils.IsDeleted(ds) {
 		reconcilers = []reconciler{
@@ -236,14 +249,71 @@ func (r *DatasetReconciler) reconcileFinalizer(ctx context.Context, ds *datasetv
 	return r.Update(ctx, ds)
 }
 
+// expectedPVCName returns the deterministic PVC name associated with a
+// Dataset. It deliberately reports the target name before checking whether
+// the backing PVC exists, so status.pvcName remains useful on retryable errors.
+func expectedPVCName(ds *datasetv1alpha1.Dataset) (string, error) {
+	if ds == nil || ds.Name == "" {
+		return "", fmt.Errorf("dataset name is required")
+	}
+	if ref := ds.Spec.VolumeClaimRef; ref != nil {
+		if err := validatePVCName(ref.Name); err != nil {
+			return "", fmt.Errorf("invalid volumeClaimRef.name: %w", err)
+		}
+		return ref.Name, nil
+	}
+	if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypePVC {
+		return pvcNameFromURI(ds.Spec.Source.URI)
+	}
+	if name := ds.Spec.VolumeClaimTemplate.Name; name != "" {
+		if err := validatePVCName(name); err != nil {
+			return "", fmt.Errorf("invalid volumeClaimTemplate.metadata.name: %w", err)
+		}
+		return name, nil
+	}
+	if err := validatePVCName(ds.Name); err != nil {
+		return "", fmt.Errorf("invalid dataset name for PVC: %w", err)
+	}
+	return ds.Name, nil
+}
+
+// validatePVCName checks the Kubernetes DNS-1123 name constraints used by
+// PersistentVolumeClaim objects. Keeping this check in the controller mirrors
+// the CRD validation and protects objects created before the CRD was updated.
+func validatePVCName(name string) error {
+	if errs := validation.IsDNS1123Subdomain(name); len(errs) != 0 {
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// pvcNameFromURI extracts and validates the PVC name without parsing the
+// optional path. This keeps status.pvcName available even when a historical
+// object has a malformed path that validation will report separately.
+func pvcNameFromURI(uri string) (string, error) {
+	const prefix = "pvc://"
+	if !strings.HasPrefix(uri, prefix) {
+		return "", fmt.Errorf("invalid PVC dataset uri %q", uri)
+	}
+	host := strings.TrimPrefix(uri, prefix)
+	if i := strings.IndexAny(host, "/?#"); i >= 0 {
+		host = host[:i]
+	}
+	if err := validatePVCName(host); err != nil {
+		return "", fmt.Errorf("invalid PVC dataset uri %q: %w", uri, err)
+	}
+	return host, nil
+}
+
 func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
+	pvcName, err := expectedPVCName(ds)
+	if err != nil {
+		return err
+	}
+	ds.Status.PVCName = pvcName
+
 	if ds.Spec.VolumeClaimRef != nil {
 		return r.reconcileClaimPVC(ctx, ds)
-	}
-
-	pvcName := ds.Name
-	if v := ds.Spec.VolumeClaimTemplate.Name; v != "" {
-		pvcName = v
 	}
 
 	forceStorageClass := ""
@@ -325,12 +395,6 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 		ds.Status.LastSucceedRound = ds.Spec.DataSyncRound
 
 	case datasetv1alpha1.DatasetTypePVC:
-		u, err := url.Parse(ds.Spec.Source.URI)
-		if err != nil {
-			return err
-		}
-		pvcName = u.Host
-
 		// 如果已经删除，尝试把 PVC 上的 label 清空
 		if kubeutils.IsDeleted(ds) {
 			pvc := &corev1.PersistentVolumeClaim{}
@@ -444,7 +508,7 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 		}
 		// 标记 ds.Status.LastSucceedRound = ds.Spec.DataSyncRound
 		ds.Status.LastSucceedRound = ds.Spec.DataSyncRound
-		volumeNameOverride = pvTemp.Name
+		volumeNameOverride = pvName
 	default:
 		// 其他类型先不做特殊逻辑
 	}
@@ -472,7 +536,7 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 
 	// 除了 reference 类型外，其他都需要按模板创建 PVC
 	pvc := &corev1.PersistentVolumeClaim{}
-	err := r.Get(ctx, client.ObjectKey{Namespace: ds.Namespace, Name: pvcName}, pvc)
+	err = r.Get(ctx, client.ObjectKey{Namespace: ds.Namespace, Name: pvcName}, pvc)
 	if err != nil && !k8serrors.IsNotFound(err) {
 		return err
 	}
@@ -1061,8 +1125,20 @@ func (r *DatasetReconciler) reconcilePhase(_ context.Context, ds *datasetv1alpha
 		return nil
 	}
 
+	// PVC-backed datasets cannot be ready until their PVC step succeeds. This
+	// also prevents NFS and volumeClaimRef failures from being masked by an
+	// already-synchronized data round.
+	if !kubeutils.IsConditionReady(ds.Status.Conditions, condTypePVC) {
+		ds.Status.Phase = datasetv1alpha1.DatasetStatusPhasePending
+		return nil
+	}
+
 	if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypePVC {
-		phase = datasetv1alpha1.DatasetStatusPhaseReady
+		if kubeutils.IsConditionReady(ds.Status.Conditions, condTypePVC) {
+			phase = datasetv1alpha1.DatasetStatusPhaseReady
+		} else {
+			phase = datasetv1alpha1.DatasetStatusPhasePending
+		}
 	} else if ds.Status.InProcessing {
 		phase = datasetv1alpha1.DatasetStatusPhaseProcessing
 	} else if ds.Status.LastSucceedRound != ds.Spec.DataSyncRound {
@@ -1121,9 +1197,13 @@ func (r *DatasetReconciler) validate(ctx context.Context, ds *datasetv1alpha1.Da
 			}
 		}
 	}
-	if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypePVC {
+	if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypePVC && ds.Spec.VolumeClaimRef == nil {
+		pvcName, err := pvcNameFromURI(ds.Spec.Source.URI)
+		if err != nil {
+			return err
+		}
 		u, err := url.Parse(ds.Spec.Source.URI)
-		if err != nil || u.Host == "" {
+		if err != nil || u.Scheme != "pvc" || u.Host != pvcName || u.RawQuery != "" || u.Fragment != "" {
 			return fmt.Errorf("invalid PVC dataset uri %q", ds.Spec.Source.URI)
 		}
 		protected, err := mountpolicy.ProtectedPVC(ctx, r.Client, ds.Namespace, u.Host)
