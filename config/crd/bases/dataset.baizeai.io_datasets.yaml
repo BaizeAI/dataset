@@ -358,6 +358,9 @@ spec:
                 properties:
                   name:
                     description: name is the name of the pvc.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?([.][a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$
                     type: string
                   subPath:
                     description: subPath is the subPath of the pvc.
@@ -765,6 +768,7 @@ spec:
                         type: string
                     type: object
                 type: object
+                x-kubernetes-embedded-resource: true
             required:
             - source
             type: object
@@ -775,6 +779,10 @@ spec:
             - message: shareAccess.rules must contain at least one rule when shareAccess
                 is configured
               rule: '!has(self.shareAccess) || size(self.shareAccess.rules) > 0'
+            - message: PVC dataset source URI must be pvc://<valid-pvc-name>[/<path>]
+                when volumeClaimRef is not set
+              rule: has(self.volumeClaimRef) || self.source.type != 'PVC' || (self.source.uri.matches('^pvc://[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?([.][a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*(/[^?#]*)?$')
+                && size(self.source.uri.split('/')[2]) <= 253)
           status:
             description: DatasetStatus defines the observed state of Dataset
             properties:
@@ -888,7 +896,10 @@ spec:
                 default: PENDING
                 type: string
               pvcName:
-                description: pvcName is the name of the pvc that contains the dataset.
+                description: |-
+                  pvcName is the deterministic target PVC name for the Dataset. Its
+                  presence does not imply that the PVC exists or is ready; use the PVC
+                  condition to determine availability.
                 type: string
               readOnly:
                 description: readOnly indicates whether the dataset is mounted as

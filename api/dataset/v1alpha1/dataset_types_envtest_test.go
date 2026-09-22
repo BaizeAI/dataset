@@ -58,6 +58,46 @@ func TestShareAccessCRDValidation(t *testing.T) {
 		ds.Spec.ShareAccess = &datasetv1alpha1.ShareAccess{Rules: []datasetv1alpha1.ShareAccessRule{{AccessMode: datasetv1alpha1.AccessModeReadOnly}}}
 		require.Error(t, apiClient.Create(ctx, ds))
 	})
+	t.Run("rejects empty volume claim ref name", func(t *testing.T) {
+		ds := newDataset("empty-volume-claim-ref")
+		ds.Spec.VolumeClaimRef = &datasetv1alpha1.VolumeClaimRef{}
+		require.Error(t, apiClient.Create(ctx, ds))
+	})
+	t.Run("rejects PVC source without a name", func(t *testing.T) {
+		ds := newDataset("empty-pvc-source")
+		ds.Spec.Source = datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypePVC, URI: "pvc://"}
+		require.Error(t, apiClient.Create(ctx, ds))
+	})
+	t.Run("accepts a PVC source with a name", func(t *testing.T) {
+		ds := newDataset("valid-pvc-source")
+		ds.Spec.Source = datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypePVC, URI: "pvc://existing"}
+		require.NoError(t, apiClient.Create(ctx, ds))
+	})
+	t.Run("rejects a PVC source with an invalid name", func(t *testing.T) {
+		ds := newDataset("invalid-pvc-source")
+		ds.Spec.Source = datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypePVC, URI: "pvc://Bad_Name"}
+		require.Error(t, apiClient.Create(ctx, ds))
+	})
+	t.Run("rejects an invalid volume claim ref name", func(t *testing.T) {
+		ds := newDataset("invalid-volume-claim-ref")
+		ds.Spec.VolumeClaimRef = &datasetv1alpha1.VolumeClaimRef{Name: "PVC_NAME"}
+		require.Error(t, apiClient.Create(ctx, ds))
+	})
+	t.Run("preserves volume claim template name", func(t *testing.T) {
+		ds := newDataset("template-name")
+		ds.Spec.Source = datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeNFS, URI: "nfs://server/path"}
+		ds.Spec.VolumeClaimTemplate.ObjectMeta.Name = "custom-pvc"
+		require.NoError(t, apiClient.Create(ctx, ds))
+		stored := &datasetv1alpha1.Dataset{}
+		require.NoError(t, apiClient.Get(ctx, client.ObjectKeyFromObject(ds), stored))
+		require.Equal(t, "custom-pvc", stored.Spec.VolumeClaimTemplate.ObjectMeta.Name)
+	})
+	t.Run("volume claim ref takes precedence over PVC source URI", func(t *testing.T) {
+		ds := newDataset("ref-over-pvc-source")
+		ds.Spec.Source = datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypePVC, URI: "not-a-pvc-uri"}
+		ds.Spec.VolumeClaimRef = &datasetv1alpha1.VolumeClaimRef{Name: "existing"}
+		require.NoError(t, apiClient.Create(ctx, ds))
+	})
 	t.Run("allows a nonempty preconfigured policy and later enabling sharing", func(t *testing.T) {
 		ds := newDataset("preconfigured")
 		ds.Spec.ShareAccess = &datasetv1alpha1.ShareAccess{Rules: []datasetv1alpha1.ShareAccessRule{validRule}}

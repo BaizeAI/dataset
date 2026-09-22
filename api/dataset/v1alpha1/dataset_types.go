@@ -128,6 +128,7 @@ type MountOptions struct {
 // DatasetSpec defines the desired state of Dataset
 // +kubebuilder:validation:XValidation:rule="oldSelf == null || (has(self.shareAccess) == has(oldSelf.shareAccess) && (!has(self.shareAccess) || self.shareAccess == oldSelf.shareAccess))",message="shareAccess is immutable and cannot be added or removed"
 // +kubebuilder:validation:XValidation:rule="!has(self.shareAccess) || size(self.shareAccess.rules) > 0",message="shareAccess.rules must contain at least one rule when shareAccess is configured"
+// +kubebuilder:validation:XValidation:rule="has(self.volumeClaimRef) || self.source.type != 'PVC' || (self.source.uri.matches('^pvc://[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?([.][a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*(/[^?#]*)?$') && size(self.source.uri.split('/')[2]) <= 253)",message="PVC dataset source URI must be pvc://<valid-pvc-name>[/<path>] when volumeClaimRef is not set"
 type DatasetSpec struct {
 	// Share indicates whether the model is shareable with others.
 	// When set to true, the model can be shared according to the specified selector.
@@ -159,6 +160,7 @@ type DatasetSpec struct {
 	// dataSyncRound is the number of data sync rounds to be performed."
 	DataSyncRound int32 `json:"dataSyncRound,omitempty"`
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:EmbeddedResource
 	VolumeClaimTemplate v1.PersistentVolumeClaim `json:"volumeClaimTemplate,omitempty"`
 	// +kubebuilder:validation:Optional
 	// volumeClaimRef is the reference to an existing PVC.
@@ -186,6 +188,9 @@ type ShareAccessRule struct {
 
 type VolumeClaimRef struct {
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?([.][a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*$"
 	// name is the name of the pvc.
 	Name string `json:"name"`
 
@@ -227,7 +232,9 @@ type DatasetStatus struct {
 	// we only keep the data sync round statuses of the last 5 data sync rounds.
 	SyncRoundStatuses []DataLoadStatus `json:"syncRoundStatuses,omitempty"`
 	// +kubebuilder:validation:Optional
-	// pvcName is the name of the pvc that contains the dataset.
+	// pvcName is the deterministic target PVC name for the Dataset. Its
+	// presence does not imply that the PVC exists or is ready; use the PVC
+	// condition to determine availability.
 	PVCName string `json:"pvcName,omitempty"`
 	// +kubebuilder:validation:Optional
 	// readOnly indicates whether the dataset is mounted as read-only.

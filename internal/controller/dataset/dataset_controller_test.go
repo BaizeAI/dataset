@@ -475,6 +475,210 @@ func TestDatasetReconciler_reconcileClaimPVC(t *testing.T) {
 	}
 }
 
+func TestExpectedPVCName(t *testing.T) {
+	tests := []struct {
+		name    string
+		ds      *datasetv1alpha1.Dataset
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "volume claim ref wins",
+			ds: &datasetv1alpha1.Dataset{
+				ObjectMeta: metav1.ObjectMeta{Name: "dataset"},
+				Spec: datasetv1alpha1.DatasetSpec{
+					Source:         datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypePVC, URI: "not-a-pvc-uri"},
+					VolumeClaimRef: &datasetv1alpha1.VolumeClaimRef{Name: "existing"},
+				},
+			},
+			want: "existing",
+		},
+		{
+			name: "PVC source uses URI host",
+			ds: &datasetv1alpha1.Dataset{
+				ObjectMeta: metav1.ObjectMeta{Name: "dataset"},
+				Spec:       datasetv1alpha1.DatasetSpec{Source: datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypePVC, URI: "pvc://source/data"}},
+			},
+			want: "source",
+		},
+		{
+			name: "NFS uses template name",
+			ds: &datasetv1alpha1.Dataset{
+				ObjectMeta: metav1.ObjectMeta{Name: "dataset"},
+				Spec: datasetv1alpha1.DatasetSpec{
+					Source:              datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeNFS, URI: "nfs://server/path"},
+					VolumeClaimTemplate: corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "nfs-pvc"}},
+				},
+			},
+			want: "nfs-pvc",
+		},
+		{
+			name: "invalid template name is rejected",
+			ds: &datasetv1alpha1.Dataset{
+				ObjectMeta: metav1.ObjectMeta{Name: "dataset"},
+				Spec: datasetv1alpha1.DatasetSpec{
+					Source:              datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeNFS, URI: "nfs://server/path"},
+					VolumeClaimTemplate: corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "Bad_Name"}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "REFERENCE defaults to dataset name",
+			ds: &datasetv1alpha1.Dataset{
+				ObjectMeta: metav1.ObjectMeta{Name: "reference"},
+				Spec:       datasetv1alpha1.DatasetSpec{Source: datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeReference, URI: "dataset://source/dataset"}},
+			},
+			want: "reference",
+		},
+		{
+			name:    "empty PVC URI is invalid",
+			ds:      &datasetv1alpha1.Dataset{ObjectMeta: metav1.ObjectMeta{Name: "dataset"}, Spec: datasetv1alpha1.DatasetSpec{Source: datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypePVC, URI: "pvc://"}}},
+			wantErr: true,
+		},
+		{
+			name:    "PVC URI with invalid name is rejected",
+			ds:      &datasetv1alpha1.Dataset{ObjectMeta: metav1.ObjectMeta{Name: "dataset"}, Spec: datasetv1alpha1.DatasetSpec{Source: datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypePVC, URI: "pvc://Bad_Name"}}},
+			wantErr: true,
+		},
+		{
+			name:    "empty volume claim ref is invalid",
+			ds:      &datasetv1alpha1.Dataset{ObjectMeta: metav1.ObjectMeta{Name: "dataset"}, Spec: datasetv1alpha1.DatasetSpec{VolumeClaimRef: &datasetv1alpha1.VolumeClaimRef{}}},
+			wantErr: true,
+		},
+		{
+			name:    "invalid volume claim ref is rejected",
+			ds:      &datasetv1alpha1.Dataset{ObjectMeta: metav1.ObjectMeta{Name: "dataset"}, Spec: datasetv1alpha1.DatasetSpec{VolumeClaimRef: &datasetv1alpha1.VolumeClaimRef{Name: "PVC_NAME"}}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := expectedPVCName(tt.ds)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestDatasetReconciler_missingPVCIsPendingAndRequeued(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, datasetv1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+	ds := &datasetv1alpha1.Dataset{
+		ObjectMeta: metav1.ObjectMeta{Name: "pvc-dataset", Namespace: "default"},
+		Spec: datasetv1alpha1.DatasetSpec{
+			Source: datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypePVC, URI: "pvc://missing"},
+		},
+	}
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&datasetv1alpha1.Dataset{}).
+		WithObjects(ds).
+		Build()
+	reconciler := &DatasetReconciler{Client: fakeClient, Scheme: scheme}
+
+	result, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ds)})
+	require.NoError(t, err)
+	assert.Equal(t, 30*time.Second, result.RequeueAfter)
+
+	stored := &datasetv1alpha1.Dataset{}
+	require.NoError(t, fakeClient.Get(context.Background(), client.ObjectKeyFromObject(ds), stored))
+	assert.Equal(t, "missing", stored.Status.PVCName)
+	assert.Equal(t, datasetv1alpha1.DatasetStatusPhasePending, stored.Status.Phase)
+	assert.False(t, kubeutils.IsConditionReady(stored.Status.Conditions, condTypePVC))
+}
+
+func TestDatasetReconciler_reconcilePhaseWaitsForPVC(t *testing.T) {
+	for _, sourceType := range []datasetv1alpha1.DatasetType{
+		datasetv1alpha1.DatasetTypeGit,
+		datasetv1alpha1.DatasetTypeNFS,
+	} {
+		t.Run(string(sourceType), func(t *testing.T) {
+			ds := &datasetv1alpha1.Dataset{
+				Spec: datasetv1alpha1.DatasetSpec{
+					Source:        datasetv1alpha1.DatasetSource{Type: sourceType},
+					DataSyncRound: 1,
+				},
+				Status: datasetv1alpha1.DatasetStatus{
+					LastSucceedRound: 1,
+					Conditions: []metav1.Condition{{
+						Type:   condTypePVC,
+						Status: metav1.ConditionFalse,
+					}},
+				},
+			}
+			reconciler := &DatasetReconciler{}
+
+			require.NoError(t, reconciler.reconcilePhase(context.Background(), ds))
+			assert.Equal(t, datasetv1alpha1.DatasetStatusPhasePending, ds.Status.Phase)
+		})
+	}
+}
+
+func TestDatasetReconciler_cachesPVCNameBeforeReconciliationError(t *testing.T) {
+	tests := []struct {
+		name string
+		ds   *datasetv1alpha1.Dataset
+		want string
+	}{
+		{
+			name: "NFS setup fails after name is derived",
+			ds: &datasetv1alpha1.Dataset{
+				ObjectMeta: metav1.ObjectMeta{Name: "nfs-dataset", Namespace: "default"},
+				Spec:       datasetv1alpha1.DatasetSpec{Source: datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeNFS, URI: "%"}},
+			},
+			want: "nfs-dataset",
+		},
+		{
+			name: "REFERENCE source is missing",
+			ds: &datasetv1alpha1.Dataset{
+				ObjectMeta: metav1.ObjectMeta{Name: "reference-dataset", Namespace: "default"},
+				Spec:       datasetv1alpha1.DatasetSpec{Source: datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeReference, URI: "dataset://missing/source"}},
+			},
+			want: "reference-dataset",
+		},
+		{
+			name: "volume claim ref target is missing",
+			ds: &datasetv1alpha1.Dataset{
+				ObjectMeta: metav1.ObjectMeta{Name: "ref-dataset", Namespace: "default"},
+				Spec: datasetv1alpha1.DatasetSpec{
+					Source:         datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeGit, URI: "https://example.com/repo.git"},
+					VolumeClaimRef: &datasetv1alpha1.VolumeClaimRef{Name: "missing"},
+				},
+			},
+			want: "missing",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			require.NoError(t, datasetv1alpha1.AddToScheme(scheme))
+			require.NoError(t, corev1.AddToScheme(scheme))
+			ds := tt.ds.DeepCopy()
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithStatusSubresource(&datasetv1alpha1.Dataset{}).
+				WithObjects(ds).
+				Build()
+			reconciler := &DatasetReconciler{Client: fakeClient, Scheme: scheme}
+
+			_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(ds)})
+			require.NoError(t, err)
+
+			stored := &datasetv1alpha1.Dataset{}
+			require.NoError(t, fakeClient.Get(context.Background(), client.ObjectKeyFromObject(ds), stored))
+			assert.Equal(t, tt.want, stored.Status.PVCName)
+		})
+	}
+}
+
 func TestDatasetReconciler_reconcilePVCNFSVersion(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -570,6 +774,37 @@ func TestDatasetReconciler_reconcilePVCNFSVersionDoesNotUpdateExistingPV(t *test
 	storedPV := &corev1.PersistentVolume{}
 	require.NoError(t, fakeClient.Get(context.Background(), client.ObjectKey{Name: pv.Name}, storedPV))
 	assert.Equal(t, []string{"nfsvers=4.1"}, storedPV.Spec.MountOptions)
+}
+
+func TestDatasetReconciler_reconcilePVCNFSBindsExistingPVWhenPVCIsMissing(t *testing.T) {
+	t.Setenv("DATASET_NFS_VERSION", "4.0")
+	require.NoError(t, config.ParseConfigFromFileContent(""))
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, datasetv1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	ds := &datasetv1alpha1.Dataset{
+		ObjectMeta: metav1.ObjectMeta{Name: "netapp-dataset", Namespace: "default"},
+		Spec: datasetv1alpha1.DatasetSpec{Source: datasetv1alpha1.DatasetSource{
+			Type: datasetv1alpha1.DatasetTypeNFS,
+			URI:  "nfs://10.0.0.1/export/path",
+		}},
+	}
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "dataset-default-pvc-netapp-dataset",
+			Labels: map[string]string{constants.DatasetNameLabel: ds.Name},
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pv).Build()
+	reconciler := &DatasetReconciler{Client: fakeClient, Scheme: scheme}
+
+	require.NoError(t, reconciler.reconcilePVC(context.Background(), ds))
+
+	pvc := &corev1.PersistentVolumeClaim{}
+	require.NoError(t, fakeClient.Get(context.Background(), client.ObjectKey{Namespace: ds.Namespace, Name: ds.Name}, pvc))
+	assert.Equal(t, pv.Name, pvc.Spec.VolumeName)
 }
 
 func TestDatasetReconciler_reconcilePVCManual(t *testing.T) {
