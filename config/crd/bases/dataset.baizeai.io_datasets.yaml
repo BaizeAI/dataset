@@ -789,9 +789,6 @@ spec:
             - source
             type: object
             x-kubernetes-validations:
-            - message: shareAccess is immutable and cannot be added or removed
-              rule: oldSelf == null || (has(self.shareAccess) == has(oldSelf.shareAccess)
-                && (!has(self.shareAccess) || self.shareAccess == oldSelf.shareAccess))
             - message: shareAccess.rules must contain at least one rule when shareAccess
                 is configured
               rule: '!has(self.shareAccess) || size(self.shareAccess.rules) > 0'
