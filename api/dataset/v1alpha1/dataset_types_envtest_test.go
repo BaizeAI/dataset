@@ -86,11 +86,11 @@ func TestShareAccessCRDValidation(t *testing.T) {
 	t.Run("preserves volume claim template name", func(t *testing.T) {
 		ds := newDataset("template-name")
 		ds.Spec.Source = datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeNFS, URI: "nfs://server/path"}
-		ds.Spec.VolumeClaimTemplate.ObjectMeta.Name = "custom-pvc"
+		ds.Spec.VolumeClaimTemplate.Name = "custom-pvc"
 		require.NoError(t, apiClient.Create(ctx, ds))
 		stored := &datasetv1alpha1.Dataset{}
 		require.NoError(t, apiClient.Get(ctx, client.ObjectKeyFromObject(ds), stored))
-		require.Equal(t, "custom-pvc", stored.Spec.VolumeClaimTemplate.ObjectMeta.Name)
+		require.Equal(t, "custom-pvc", stored.Spec.VolumeClaimTemplate.Name)
 	})
 	t.Run("volume claim ref takes precedence over PVC source URI", func(t *testing.T) {
 		ds := newDataset("ref-over-pvc-source")
