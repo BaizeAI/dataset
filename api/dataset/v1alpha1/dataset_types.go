@@ -160,7 +160,6 @@ type DatasetSpec struct {
 	// dataSyncRound is the number of data sync rounds to be performed."
 	DataSyncRound int32 `json:"dataSyncRound,omitempty"`
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:EmbeddedResource
 	VolumeClaimTemplate v1.PersistentVolumeClaim `json:"volumeClaimTemplate,omitempty"`
 	// +kubebuilder:validation:Optional
 	// volumeClaimRef is the reference to an existing PVC.

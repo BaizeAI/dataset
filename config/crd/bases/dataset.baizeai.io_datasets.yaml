@@ -391,6 +391,23 @@ spec:
                     description: |-
                       Standard object's metadata.
                       More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        type: object
+                      finalizers:
+                        items:
+                          type: string
+                        type: array
+                      labels:
+                        additionalProperties:
+                          type: string
+                        type: object
+                      name:
+                        type: string
+                      namespace:
+                        type: string
                     type: object
                   spec:
                     description: |-
@@ -768,7 +785,6 @@ spec:
                         type: string
                     type: object
                 type: object
-                x-kubernetes-embedded-resource: true
             required:
             - source
             type: object
