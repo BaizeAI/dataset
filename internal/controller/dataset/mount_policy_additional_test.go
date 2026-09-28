@@ -31,7 +31,10 @@ func TestReconcileMountPolicyStoresFullSourceChain(t *testing.T) {
 	c.Spec.Share = false
 	objects := append(referenceTestStorage(a, nil), referenceTestStorage(b, a)...)
 	objects = append(objects, referenceTestStorage(c, b)...)
-	objects = append(objects, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "target", Labels: map[string]string{"workspace": "one"}}})
+	objects = append(objects,
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "target", Labels: map[string]string{"workspace": "one"}}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "b", Labels: map[string]string{"workspace": "one"}}},
+	)
 	reconciler := &DatasetReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build(), Scheme: scheme}
 
 	require.NoError(t, reconciler.reconcileMountPolicy(ctx, c))
@@ -91,4 +94,61 @@ func referenceTestStorage(ds, parent *datasetv1alpha1.Dataset) []client.Object {
 		}
 	}
 	return []client.Object{ds, pvc, pv}
+}
+
+func TestReconcileMountPolicyInheritsIntermediateGrants(t *testing.T) {
+	for _, mode := range []mountpolicy.GrantResult{mountpolicy.ReadOnly, mountpolicy.ReadWrite, mountpolicy.Denied} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx := context.Background()
+			scheme := runtime.NewScheme()
+			require.NoError(t, datasetv1alpha1.AddToScheme(scheme))
+			require.NoError(t, corev1.AddToScheme(scheme))
+
+			a := referenceTestSource("a", "a", "a-uid", "a-pvc", "a-pvc-uid", "a-pv", "a-pv-uid", nil, nil)
+			a.Spec.Share = true
+			// A grants the final namespace RW but can restrict B's namespace.
+			if mode != mountpolicy.Denied {
+				access := datasetv1alpha1.AccessModeReadWrite
+				if mode == mountpolicy.ReadOnly {
+					access = datasetv1alpha1.AccessModeReadOnly
+				}
+				a.Spec.ShareAccess.Rules = append(a.Spec.ShareAccess.Rules, datasetv1alpha1.ShareAccessRule{
+					NamespaceSelector: metav1.LabelSelector{MatchLabels: map[string]string{"workspace": "two"}},
+					AccessMode:        access,
+				})
+			}
+			b := referenceTestSource("b", "b", "b-uid", "b-pvc", "b-pvc-uid", "b-pv", "b-pv-uid", a,
+				&datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeReference, URI: "dataset://a/a"})
+			c := referenceTestSource("c", "target", "c-uid", "c-pvc", "c-pvc-uid", "c-pv", "c-pv-uid", b,
+				&datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeReference, URI: "dataset://b/b"})
+			objects := append(referenceTestStorage(a, nil), referenceTestStorage(b, a)...)
+			objects = append(objects, referenceTestStorage(c, b)...)
+			objects = append(objects,
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "target", Labels: map[string]string{"workspace": "one"}}},
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "b", Labels: map[string]string{"workspace": "two"}}},
+			)
+			reconciler := &DatasetReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build(), Scheme: scheme}
+			err := reconciler.reconcileMountPolicy(ctx, c)
+			reconciler.setMountPolicyCondition(c, err)
+			if mode == mountpolicy.Denied {
+				require.ErrorContains(t, err, "not shared to namespace b")
+				require.ErrorContains(t, err, "reference dataset target/c")
+				require.ErrorContains(t, err, "source dataset a/a")
+				require.True(t, c.Status.ReadOnly)
+				_, err = mountpolicy.Verify(ctx, reconciler.Client, c)
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, mode == mountpolicy.ReadOnly, c.Status.ReadOnly)
+			verified, err := mountpolicy.Verify(ctx, reconciler.Client, c)
+			require.NoError(t, err)
+			require.Equal(t, c.Status.ReadOnly, verified.ReadOnly)
+			if mode == mountpolicy.ReadOnly {
+				c.Status.ReadOnly = false // stale status from the v0.1.14 controller
+				_, err = mountpolicy.Verify(ctx, reconciler.Client, c)
+				require.ErrorContains(t, err, "mount access mode no longer matches source policy")
+			}
+		})
+	}
 }

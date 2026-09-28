@@ -1315,50 +1315,60 @@ func (r *DatasetReconciler) enqueueReferenceDatasets(ctx context.Context, object
 		requests = append(requests, reconcile.Request{NamespacedName: key})
 	}
 
+	var queue []client.ObjectKey
 	switch changed := object.(type) {
 	case *corev1.Namespace:
-		// Namespace labels affect only references whose final target is this namespace.
+		// Namespace labels affect references in this namespace and every
+		// downstream reference that inherits their grants.
 		for i := range list.Items {
 			ds := &list.Items[i]
 			if ds.Namespace == changed.Name && ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeReference && !kubeutils.IsDeleted(ds) {
-				appendRequest(client.ObjectKeyFromObject(ds))
+				key := client.ObjectKeyFromObject(ds)
+				appendRequest(key)
+				queue = append(queue, key)
 			}
 		}
-		return requests
 	case *datasetv1alpha1.Dataset:
-		// Walk the reverse reference graph so source changes reach direct and
-		// transitive dependents without requeueing unrelated references.
-		reverse := make(map[client.ObjectKey][]client.ObjectKey)
-		for i := range list.Items {
-			ds := &list.Items[i]
-			if ds.Spec.Source.Type != datasetv1alpha1.DatasetTypeReference || kubeutils.IsDeleted(ds) {
-				continue
-			}
-			source, err := mountpolicy.ParseReference(ds.Spec.Source.URI)
-			if err != nil {
-				continue
-			}
-			reverse[source] = append(reverse[source], client.ObjectKeyFromObject(ds))
-		}
-
-		queue := []client.ObjectKey{client.ObjectKeyFromObject(changed)}
-		visited := make(map[client.ObjectKey]struct{})
-		for len(queue) > 0 {
-			key := queue[0]
-			queue = queue[1:]
-			if _, ok := visited[key]; ok {
-				continue
-			}
-			visited[key] = struct{}{}
-			for _, dependent := range reverse[key] {
-				appendRequest(dependent)
-				queue = append(queue, dependent)
-			}
-		}
-		return requests
+		// For() already enqueues the changed Dataset itself; this watch only
+		// enqueues its dependents. Namespace events must enqueue both.
+		queue = append(queue, client.ObjectKeyFromObject(changed))
 	default:
 		return nil
 	}
+
+	if len(queue) == 0 {
+		return requests
+	}
+
+	// Walk the reverse reference graph so Dataset and Namespace changes
+	// reach transitive dependents without requeueing unrelated references.
+	reverse := make(map[client.ObjectKey][]client.ObjectKey)
+	for i := range list.Items {
+		ds := &list.Items[i]
+		if ds.Spec.Source.Type != datasetv1alpha1.DatasetTypeReference || kubeutils.IsDeleted(ds) {
+			continue
+		}
+		source, err := mountpolicy.ParseReference(ds.Spec.Source.URI)
+		if err != nil {
+			continue
+		}
+		reverse[source] = append(reverse[source], client.ObjectKeyFromObject(ds))
+	}
+
+	visited := make(map[client.ObjectKey]struct{})
+	for len(queue) > 0 {
+		key := queue[0]
+		queue = queue[1:]
+		if _, ok := visited[key]; ok {
+			continue
+		}
+		visited[key] = struct{}{}
+		for _, dependent := range reverse[key] {
+			appendRequest(dependent)
+			queue = append(queue, dependent)
+		}
+	}
+	return requests
 }
 
 func dependencyDatasetChanged(update event.UpdateEvent) bool {

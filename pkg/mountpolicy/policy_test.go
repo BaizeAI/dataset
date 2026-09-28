@@ -102,7 +102,7 @@ func TestResolveRequiresEverySourceAndReadonlyWins(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "leaf", Namespace: "target"},
 		Spec:       datasetv1alpha1.DatasetSpec{Source: datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeReference, URI: "dataset://middle/middle"}},
 	}
-	reader := newReader(t, target, root, middle)
+	reader := newReader(t, target, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "middle", Labels: map[string]string{"workspace": "one"}}}, root, middle)
 	resolution, err := Resolve(ctx, reader, leaf)
 	require.NoError(t, err)
 	require.True(t, resolution.ReadOnly)
@@ -110,7 +110,7 @@ func TestResolveRequiresEverySourceAndReadonlyWins(t *testing.T) {
 	require.Equal(t, []string{"middle", "root"}, []string{resolution.Sources[0].Name, resolution.Sources[1].Name})
 
 	root.Spec.ShareAccess = policy(datasetv1alpha1.AccessModeReadWrite, "other")
-	reader = newReader(t, target, root, middle)
+	reader = newReader(t, target, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "middle", Labels: map[string]string{"workspace": "one"}}}, root, middle)
 	_, err = Resolve(ctx, reader, leaf)
 	require.ErrorContains(t, err, "not shared")
 }

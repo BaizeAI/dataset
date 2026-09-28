@@ -154,6 +154,47 @@ func TestDatasetReconciler_enqueueReferenceDatasetsScopesDependencies(t *testing
 	require.True(t, dependencyDatasetChanged(event.UpdateEvent{ObjectOld: oldDataset, ObjectNew: newDataset}))
 }
 
+func TestDatasetReconciler_enqueueNamespaceTransitiveReferences(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, datasetv1alpha1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	reference := func(namespace, name, uri string) *datasetv1alpha1.Dataset {
+		return &datasetv1alpha1.Dataset{
+			ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+			Spec: datasetv1alpha1.DatasetSpec{Source: datasetv1alpha1.DatasetSource{
+				Type: datasetv1alpha1.DatasetTypeReference, URI: uri,
+			}},
+		}
+	}
+	// Both intermediate references are in the changed namespace. Their shared
+	// descendants must be enqueued once, including those multiple hops away.
+	first := reference("middle", "first", "dataset://origin/source")
+	second := reference("middle", "second", "dataset://middle/first")
+	third := reference("target", "third", "dataset://middle/second")
+	leaf := reference("target", "leaf", "dataset://target/third")
+	unrelated := reference("other", "unrelated", "dataset://origin/source")
+	source := &datasetv1alpha1.Dataset{ObjectMeta: metav1.ObjectMeta{Namespace: "origin", Name: "source"}}
+	reconciler := &DatasetReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(source, first, second, third, leaf, unrelated).Build(), Scheme: scheme}
+
+	requests := reconciler.enqueueReferenceDatasets(context.Background(), &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "middle", Labels: map[string]string{"workspace": "changed"}},
+	})
+	require.ElementsMatch(t, []client.ObjectKey{
+		{Namespace: "middle", Name: "first"},
+		{Namespace: "middle", Name: "second"},
+		{Namespace: "target", Name: "third"},
+		{Namespace: "target", Name: "leaf"},
+	}, requestKeys(requests))
+
+	// A source namespace's labels do not affect grants to other namespaces.
+	requests = reconciler.enqueueReferenceDatasets(context.Background(), &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "origin"},
+	})
+	require.Empty(t, requests)
+}
+
 func requestKeys(requests []reconcile.Request) []client.ObjectKey {
 	keys := make([]client.ObjectKey, 0, len(requests))
 	for _, request := range requests {

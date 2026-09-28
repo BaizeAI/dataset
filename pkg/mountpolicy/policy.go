@@ -53,36 +53,59 @@ type Resolution struct {
 // schema validation (for example, a fake client, an old API server, or an
 // imported object).
 func Validate(ds *datasetv1alpha1.Dataset) error {
+	_, err := compilePolicy(ds)
+	return err
+}
+
+type compiledRule struct {
+	selector labels.Selector
+	mode     datasetv1alpha1.AccessMode
+}
+
+type compiledPolicy struct {
+	namespaceSelector labels.Selector
+	rules             []compiledRule
+}
+
+// compilePolicy validates every rule before any grant is evaluated. Resolve
+// reuses the parsed selectors for every distinct target of the same source.
+func compilePolicy(ds *datasetv1alpha1.Dataset) (*compiledPolicy, error) {
 	if ds == nil {
-		return fmt.Errorf("dataset is required")
+		return nil, fmt.Errorf("dataset is required")
 	}
 	if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeReference && ds.Spec.VolumeClaimRef != nil {
-		return fmt.Errorf("REFERENCE dataset cannot set volumeClaimRef")
+		return nil, fmt.Errorf("REFERENCE dataset cannot set volumeClaimRef")
 	}
+	compiled := &compiledPolicy{namespaceSelector: labels.Everything()}
 	if ds.Spec.ShareToNamespaceSelector != nil && !emptySelector(ds.Spec.ShareToNamespaceSelector) {
-		if _, err := metav1.LabelSelectorAsSelector(ds.Spec.ShareToNamespaceSelector); err != nil {
-			return fmt.Errorf("shareToNamespaceSelector is invalid: %w", err)
+		selector, err := metav1.LabelSelectorAsSelector(ds.Spec.ShareToNamespaceSelector)
+		if err != nil {
+			return nil, fmt.Errorf("shareToNamespaceSelector is invalid: %w", err)
 		}
+		compiled.namespaceSelector = selector
 	}
 	policy := ds.Spec.ShareAccess
 	if policy == nil {
-		return nil
+		return compiled, nil
 	}
 	if len(policy.Rules) == 0 {
-		return fmt.Errorf("shareAccess.rules must contain at least one rule when shareAccess is configured")
+		return nil, fmt.Errorf("shareAccess.rules must contain at least one rule when shareAccess is configured")
 	}
+	compiled.rules = make([]compiledRule, 0, len(policy.Rules))
 	for i, rule := range policy.Rules {
 		if rule.AccessMode != datasetv1alpha1.AccessModeReadOnly && rule.AccessMode != datasetv1alpha1.AccessModeReadWrite {
-			return fmt.Errorf("shareAccess.rules[%d].accessMode %q is invalid", i, rule.AccessMode)
+			return nil, fmt.Errorf("shareAccess.rules[%d].accessMode %q is invalid", i, rule.AccessMode)
 		}
 		if emptySelector(&rule.NamespaceSelector) {
-			return fmt.Errorf("shareAccess.rules[%d].namespaceSelector must not be empty", i)
+			return nil, fmt.Errorf("shareAccess.rules[%d].namespaceSelector must not be empty", i)
 		}
-		if _, err := metav1.LabelSelectorAsSelector(&rule.NamespaceSelector); err != nil {
-			return fmt.Errorf("shareAccess.rules[%d].namespaceSelector is invalid: %w", i, err)
+		selector, err := metav1.LabelSelectorAsSelector(&rule.NamespaceSelector)
+		if err != nil {
+			return nil, fmt.Errorf("shareAccess.rules[%d].namespaceSelector is invalid: %w", i, err)
 		}
+		compiled.rules = append(compiled.rules, compiledRule{selector: selector, mode: rule.AccessMode})
 	}
-	return nil
+	return compiled, nil
 }
 
 // Grant computes the access that source grants to targetNamespace. Namespace
@@ -98,41 +121,38 @@ func Grant(ctx context.Context, reader client.Reader, source *datasetv1alpha1.Da
 	if source.DeletionTimestamp != nil || !source.Spec.Share {
 		return Denied, nil
 	}
-	if err := Validate(source); err != nil {
+	policy, err := compilePolicy(source)
+	if err != nil {
 		return Denied, err
 	}
+	return policy.grant(ctx, reader, targetNamespace)
+}
 
+func (p *compiledPolicy) grant(ctx context.Context, reader client.Reader, targetNamespace string) (GrantResult, error) {
+	if targetNamespace == "" {
+		return Denied, fmt.Errorf("target namespace is required")
+	}
 	ns := &corev1.Namespace{}
 	if err := reader.Get(ctx, client.ObjectKey{Name: targetNamespace}, ns); err != nil {
 		return Denied, fmt.Errorf("get target namespace %q: %w", targetNamespace, err)
 	}
-	if source.Spec.ShareToNamespaceSelector != nil && !emptySelector(source.Spec.ShareToNamespaceSelector) {
-		selector, err := metav1.LabelSelectorAsSelector(source.Spec.ShareToNamespaceSelector)
-		if err != nil {
-			return Denied, fmt.Errorf("parse shareToNamespaceSelector: %w", err)
-		}
-		if !selector.Matches(labels.Set(ns.Labels)) {
-			return Denied, nil
-		}
+	namespaceLabels := labels.Set(ns.Labels)
+	if !p.namespaceSelector.Matches(namespaceLabels) {
+		return Denied, nil
 	}
 
-	// A nil policy is the legacy sharing contract: shared references are
-	// readable, never writable. An explicit policy has no fallback rule.
-	if source.Spec.ShareAccess == nil {
+	// Nil rules preserve legacy read-only sharing. Explicit empty policies
+	// have already been rejected by compilePolicy.
+	if p.rules == nil {
 		return ReadOnly, nil
 	}
-
 	grant := Denied
-	for i, rule := range source.Spec.ShareAccess.Rules {
-		selector, err := metav1.LabelSelectorAsSelector(&rule.NamespaceSelector)
-		if err != nil {
-			return Denied, fmt.Errorf("parse shareAccess.rules[%d].namespaceSelector: %w", i, err)
-		}
-		if !selector.Matches(labels.Set(ns.Labels)) {
+	for _, rule := range p.rules {
+		if !rule.selector.Matches(namespaceLabels) {
 			continue
 		}
 		// ReadOnly wins over every ReadWrite match.
-		if rule.AccessMode == datasetv1alpha1.AccessModeReadOnly {
+		if rule.mode == datasetv1alpha1.AccessModeReadOnly {
 			return ReadOnly, nil
 		}
 		grant = ReadWrite
@@ -140,9 +160,34 @@ func Grant(ctx context.Context, reader client.Reader, source *datasetv1alpha1.Da
 	return grant, nil
 }
 
-// Resolve re-resolves every reference edge against the final Dataset namespace.
-// It does not use upstream status.ReadOnly: status is a cached outcome and
-// cannot grant access after a source policy changes.
+// namespaceCachingReader keeps namespace identities consistent during one
+// resolution while checking every ancestor against each intermediate.
+// It is local to one sequential Resolve call and is not concurrency-safe.
+// All namespace reads in this path use *corev1.Namespace.
+type namespaceCachingReader struct {
+	client.Reader
+	namespaces map[string]*corev1.Namespace
+}
+
+func (r *namespaceCachingReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	target, ok := obj.(*corev1.Namespace)
+	if !ok {
+		return r.Reader.Get(ctx, key, obj, opts...)
+	}
+	if cached, found := r.namespaces[key.Name]; found {
+		cached.DeepCopyInto(target)
+		return nil
+	}
+	if err := r.Reader.Get(ctx, key, target, opts...); err != nil {
+		return err
+	}
+	r.namespaces[key.Name] = target.DeepCopy()
+	return nil
+}
+
+// Resolve checks every ancestor against the final namespace and all intervening
+// reference namespaces. Any inherited denial or read-only grant is preserved.
+// Cached upstream status.ReadOnly never grants access.
 func Resolve(ctx context.Context, reader client.Reader, ds *datasetv1alpha1.Dataset) (*Resolution, error) {
 	if ds == nil || ds.Spec.Source.Type != datasetv1alpha1.DatasetTypeReference {
 		return nil, fmt.Errorf("a REFERENCE dataset is required")
@@ -151,6 +196,9 @@ func Resolve(ctx context.Context, reader client.Reader, ds *datasetv1alpha1.Data
 		return nil, err
 	}
 
+	reader = &namespaceCachingReader{Reader: reader, namespaces: make(map[string]*corev1.Namespace)}
+	targetNamespaces := []string{ds.Namespace}
+	namespaceSeen := map[string]struct{}{ds.Namespace: {}}
 	seen := map[string]struct{}{datasetKey(ds.Namespace, ds.Name): {}}
 	current := ds
 	result := &Resolution{}
@@ -175,22 +223,33 @@ func Resolve(ctx context.Context, reader client.Reader, ds *datasetv1alpha1.Data
 		if source.DeletionTimestamp != nil {
 			return nil, fmt.Errorf("source dataset %s/%s is deleting", source.Namespace, source.Name)
 		}
-		grant, err := Grant(ctx, reader, source, ds.Namespace)
-		if err != nil {
-			return nil, err
+		if !source.Spec.Share {
+			return nil, fmt.Errorf("reference dataset %s/%s: source dataset %s/%s is not shared to namespace %s", ds.Namespace, ds.Name, source.Namespace, source.Name, ds.Namespace)
 		}
-		if grant == Denied {
-			return nil, fmt.Errorf("source dataset %s/%s is not shared to namespace %s", source.Namespace, source.Name, ds.Namespace)
+		policy, err := compilePolicy(source)
+		if err != nil {
+			return nil, fmt.Errorf("reference dataset %s/%s: source dataset %s/%s: %w", ds.Namespace, ds.Name, source.Namespace, source.Name, err)
+		}
+		for _, namespace := range targetNamespaces {
+			grant, err := policy.grant(ctx, reader, namespace)
+			if err != nil {
+				return nil, err
+			}
+			if grant == Denied {
+				return nil, fmt.Errorf("reference dataset %s/%s: source dataset %s/%s is not shared to namespace %s in its reference chain", ds.Namespace, ds.Name, source.Namespace, source.Name, namespace)
+			}
+			result.ReadOnly = result.ReadOnly || grant == ReadOnly
 		}
 		result.Sources = append(result.Sources, source)
-		if grant == ReadOnly {
-			result.ReadOnly = true
-		}
 		if source.Spec.Source.Type != datasetv1alpha1.DatasetTypeReference {
 			return result, nil
 		}
 		if source.Spec.VolumeClaimRef != nil {
 			return nil, fmt.Errorf("source REFERENCE dataset %s/%s sets volumeClaimRef", source.Namespace, source.Name)
+		}
+		if _, found := namespaceSeen[source.Namespace]; !found {
+			namespaceSeen[source.Namespace] = struct{}{}
+			targetNamespaces = append(targetNamespaces, source.Namespace)
 		}
 		current = source
 	}

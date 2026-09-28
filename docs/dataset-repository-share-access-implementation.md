@@ -131,6 +131,25 @@ For C's final namespace:
 
 Do not treat an upstream legacy `status.readOnly=false` as authorization; resolve the current chain again.
 
+Each ancestor must authorize every distinct namespace below it in the reference chain, including the final namespace. For `target/C -> b/B -> a/A`, check B's grant to `target`, A's grant to `target`, and A's grant to `b`. For longer chains, apply the same rule to each intermediate reference's effective permission. Repeated namespaces do not require repeated checks. Validate and parse each source policy once per resolution, then reuse its selectors for these checks.
+
+### 3.3 Upgrade Compatibility
+
+Intermediate-namespace authorization extends the previous final-namespace checks. Existing references can become denied or read-only even when the root source still grants read-write access to the final namespace:
+
+| Reference path | Relevant grants | Result |
+| --- | --- | --- |
+| `target/C -> a/A` | A grants `target` read-write | Read-write; namespace `b` is not on this path |
+| `target/C -> b/B -> a/A` | A and B grant `target` read-write; A denies `b` | Denied |
+| `target/C -> b/B -> a/A` | A and B grant `target` read-write; A grants `b` read-only | Read-only |
+| `target/C -> b/B -> a/A` | All three required grants are read-write | Read-write |
+
+These results assume valid source identities and PVC/PV bindings. A denial sets `MountPolicy=False` and conservatively sets `status.readOnly=true`; this does not permit read-only mounting. Denial messages identify the final Dataset, the ancestor source, and the namespace whose grant failed. B's own cached MountPolicy is not an authorization check for C.
+
+Before upgrading, inspect existing reference chains and their current namespace labels. Ensure every required intermediate grant matches the intended access. If an intermediate namespace should not receive access, create a new direct reference to an authorized source when appropriate; the existing reference URI is immutable. Consumers must call `Verify` before creating Pods and handle a denied or changed grant. This verification does not revoke mounts in already-running Pods.
+
+Namespace label events propagate to all transitive reference dependents because those labels now affect downstream permissions. Deploy this propagation with the intermediate-namespace checks. If those checks are reverted, reassess and normally remove the propagation change too; leaving it in place causes extra reconciliation but does not itself tighten authorization.
+
 ## 4. Dataset Controller
 
 Modify `internal/controller/dataset/dataset_controller.go`.
@@ -183,6 +202,8 @@ Add at least the following tests:
 - When JSON/unstructured representation omits `status.ReadOnly=false`, `Verify` may return writable only with `MountPolicy=True` and matching `observedGeneration`.
 - Read-only wins where overlapping rules match the same namespace.
 - Multi-level references: upstream read-only, upstream not authorizing the final namespace, fully read-write chains, cycles, and excessive depth.
+- Intermediate namespace grants: deny and read-only must propagate despite read-write grants to the final namespace; direct references remain independent of namespaces outside their chain. Cover repeated namespaces and 32-level chains with both shared and distinct namespaces.
+- Namespace label events enqueue references in that namespace and all transitive dependents exactly once, excluding unrelated references and namespaces without references.
 - Effective permission is reconciled again after a Ready PVC when namespace workspace labels or source policy changes.
 - A REFERENCE that enters Failed due to a temporary source/policy error automatically recovers through periodic requeue even without an additional watch event.
 - A PVC-preparation failure (such as a source without a PVC or a PVC not bound to a PV) must set `MountPolicy=False` and must not leave an old condition behind.
