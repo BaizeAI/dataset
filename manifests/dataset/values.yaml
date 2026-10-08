@@ -8,6 +8,7 @@ global:
   debug: false
 
 config:
+  # A custom loader image must implement the same S3 TLS contract as the controller.
   dataset_job_spec: {}
   # NFS protocol version used when creating new NFS PVs. Supported values are
   # 3, 4.0, 4.1, and 4.2. This value is passed to the controller through
@@ -67,6 +68,7 @@ tolerations: []
 
 affinity: {}
 
+# Release CI pins both images to the same release tag. Upgrade both before enabling S3 TLS.
 controller:
   image:
     registry: ''

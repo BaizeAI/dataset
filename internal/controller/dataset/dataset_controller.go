@@ -747,6 +747,11 @@ func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha
 		}
 
 		podSpec := &jobSpec.Template.Spec
+		if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeS3 {
+			if err := configureS3TLS(options, podSpec, container); err != nil {
+				return err
+			}
+		}
 
 		// conda 类型需要将 ConfigMap mount 到容器
 		condaKeyItems := make([]corev1.KeyToPath, 0, 2)

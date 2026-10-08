@@ -3,12 +3,16 @@ package datasources
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/samber/lo"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/samber/lo"
+
+	"github.com/BaizeAI/dataset/pkg/s3tls"
 
 	"github.com/sirupsen/logrus"
 
@@ -37,7 +41,7 @@ func NewS3Loader(datasourceOptions map[string]string, options Options, secrets S
 	s3.s3Options.secretAccessKey = secrets.AKSKSecretAccessKey
 	s3.s3Options.SyncMode = lo.CoalesceOrEmpty(datasourceOptions["syncMode"], "sync")
 
-	err = s3.validateOptions(s3Options)
+	err = s3.validateOptions(s3.s3Options)
 	if err != nil {
 		return nil, err
 	}
@@ -46,10 +50,12 @@ func NewS3Loader(datasourceOptions map[string]string, options Options, secrets S
 }
 
 type S3LoaderOptions struct {
-	Provider string `json:"provider"`
-	Region   string `json:"region"`
-	Endpoint string `json:"endpoint"`
-	SyncMode string `json:"syncMode"`
+	Provider  string `json:"provider"`
+	Region    string `json:"region"`
+	Endpoint  string `json:"endpoint"`
+	SyncMode  string `json:"syncMode"`
+	TLSMode   string `json:"tlsMode"`
+	TLSCAFile string `json:"tlsCAFile"`
 
 	accessKeyID     string
 	secretAccessKey string
@@ -79,7 +85,36 @@ func (d *S3Loader) validateOptions(options S3LoaderOptions) error {
 		return fmt.Errorf("invalid syncMode '%s', must be 'sync' or 'copy'", options.SyncMode)
 	}
 
-	return nil
+	mode, err := s3tls.Mode(options.TLSMode)
+	if err != nil {
+		return err
+	}
+	if err := s3tls.ValidateEndpoint(mode, options.Provider, options.Endpoint); err != nil {
+		return err
+	}
+	if mode != s3tls.CustomCA {
+		if options.TLSCAFile != "" {
+			return fmt.Errorf("tlsCAFile is only allowed with customCA")
+		}
+		return nil
+	}
+	if options.TLSCAFile == "" {
+		return fmt.Errorf("tlsCAFile is required with customCA")
+	}
+	f, err := os.Open(options.TLSCAFile)
+	if err != nil {
+		return fmt.Errorf("cannot read TLS CA file: %w", err)
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.Warnf("failed to close TLS CA file: %v", err)
+		}
+	}()
+	data, err := io.ReadAll(io.LimitReader(f, s3tls.MaxCABytes+1))
+	if err != nil {
+		return fmt.Errorf("cannot read TLS CA file: %w", err)
+	}
+	return s3tls.ValidateCA(data)
 }
 
 func (d *S3Loader) mapProviderEnumStringToRCloneProvider(provider string) string {
@@ -95,6 +130,7 @@ func (d *S3Loader) mapProviderEnumStringToRCloneProvider(provider string) string
 
 func (d *S3Loader) configTouch() error {
 	cmd := exec.Command("rclone", "config", "touch")
+	cmd.Env = s3TLSEnvironment(os.Environ())
 
 	logger := log.WithField("command", cmd.String())
 	logger.Debug("executing command to touch rclone config")
@@ -149,6 +185,7 @@ func (d *S3Loader) configCreate(configName string) error {
 	}
 
 	cmd := exec.Command("rclone", args...)
+	cmd.Env = s3TLSEnvironment(os.Environ())
 
 	logger = logger.WithField("command", cmd.String())
 	logger.Debug("executing command to create a new rclone config")
@@ -165,6 +202,10 @@ func (d *S3Loader) configCreate(configName string) error {
 }
 
 func (d *S3Loader) Sync(fromURI string, toPath string) error {
+	// Validate again before launching rclone: projected Secret contents may change.
+	if err := d.validateOptions(d.s3Options); err != nil {
+		return err
+	}
 	parsedURL, err := url.Parse(d.Options.URI)
 	if err != nil {
 		return err
@@ -214,13 +255,14 @@ func (d *S3Loader) Sync(fromURI string, toPath string) error {
 	}
 
 	args = append(args, "-vvv")
+	args = append(args, d.tlsArgs()...)
 	cmd := exec.Command("rclone", args...)
 	cmd.Dir = d.Options.Root
 
 	logger = logger.WithField("command", cmd.String())
 	logger.Debug("executing command to copy data")
 
-	cmd.Env = os.Environ()
+	cmd.Env = s3TLSEnvironment(os.Environ())
 
 	if accessKeyID != "" && secretAccessKey != "" {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("RCLONE_S3_ACCESS_KEY_ID=%s", accessKeyID))
@@ -236,4 +278,27 @@ func (d *S3Loader) Sync(fromURI string, toPath string) error {
 	logger.Debugf("rclone copy command output: %s", outBuffer.String())
 
 	return nil
+}
+
+func (d *S3Loader) tlsArgs() []string {
+	if d.s3Options.TLSMode == s3tls.InsecureSkipVerify {
+		return []string{"--no-check-certificate=true"}
+	}
+	args := []string{"--no-check-certificate=false"}
+	if d.s3Options.TLSMode == s3tls.CustomCA {
+		args = append(args, "--ca-cert", d.s3Options.TLSCAFile)
+	}
+	return args
+}
+
+func s3TLSEnvironment(env []string) []string {
+	result := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.EqualFold(key, "RCLONE_NO_CHECK_CERTIFICATE") || strings.EqualFold(key, "RCLONE_CA_CERT") {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return result
 }
