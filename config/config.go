@@ -1,7 +1,7 @@
 package config
 
 import (
-	"fmt"
+	"github.com/BaizeAI/dataset/pkg/nfsconfig"
 	"os"
 	"strings"
 
@@ -14,8 +14,8 @@ var (
 )
 
 const (
-	defaultDatasetNFSVersion = "4.1"
-	datasetNFSVersionEnv     = "DATASET_NFS_VERSION"
+	defaultDatasetNFSVersion = nfsconfig.DefaultVersion
+	datasetNFSVersionEnv     = nfsconfig.EnvironmentKey
 )
 
 type configuration struct {
@@ -25,12 +25,7 @@ type configuration struct {
 }
 
 func validateDatasetNFSVersion(version string) error {
-	switch version {
-	case "3", "4.0", "4.1", "4.2":
-		return nil
-	default:
-		return fmt.Errorf("unsupported dataset NFS version %q, must be one of: 3, 4.0, 4.1, 4.2", version)
-	}
+	return nfsconfig.Validate(version)
 }
 
 // GetDatasetNFSVersion returns the NFS protocol version used for newly-created NFS PVs.

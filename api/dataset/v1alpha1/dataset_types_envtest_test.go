@@ -2,6 +2,7 @@ package v1alpha1_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -117,4 +118,51 @@ func TestShareAccessCRDValidation(t *testing.T) {
 		immutable.Spec.ShareAccess.Rules[0].AccessMode = datasetv1alpha1.AccessModeReadWrite
 		require.NoError(t, apiClient.Update(ctx, immutable))
 	})
+
+	t.Run("NFS version schema and transitions", func(t *testing.T) {
+		for index, options := range []map[string]string{nil, {}, {"other": "value"}, {"nfsVersion": "3"}, {"nfsVersion": "4.0"}, {"nfsVersion": "4.1"}, {"nfsVersion": "4.2"}} {
+			ds := newDataset(fmt.Sprintf("nfs-version-%d", index))
+			ds.Spec.Source = datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeNFS, URI: "nfs://server/export", Options: options}
+			require.NoError(t, apiClient.Create(ctx, ds))
+			ds.Annotations = map[string]string{"description": "updated"}
+			require.NoError(t, apiClient.Update(ctx, ds))
+			unchanged := ds.DeepCopy()
+			if unchanged.Spec.Source.Options == nil {
+				unchanged.Spec.Source.Options = map[string]string{}
+			}
+			unchanged.Spec.Source.Options["other"] = "updated"
+			require.NoError(t, apiClient.Update(ctx, unchanged))
+			delete(unchanged.Spec.Source.Options, "other")
+			require.NoError(t, apiClient.Update(ctx, unchanged))
+			changed := unchanged.DeepCopy()
+			if changed.Spec.Source.Options == nil {
+				changed.Spec.Source.Options = map[string]string{}
+			}
+			changed.Spec.Source.Options["nfsVersion"] = "3"
+			if options["nfsVersion"] == "3" {
+				changed.Spec.Source.Options["nfsVersion"] = "4.1"
+			}
+			require.Error(t, apiClient.Update(ctx, changed))
+			if _, present := options["nfsVersion"]; present {
+				removed := unchanged.DeepCopy()
+				delete(removed.Spec.Source.Options, "nfsVersion")
+				require.Error(t, apiClient.Update(ctx, removed))
+				removed.Spec.Source.Options = nil
+				require.Error(t, apiClient.Update(ctx, removed))
+			}
+		}
+		for index, version := range []string{"", "4", "5", "auto"} {
+			ds := newDataset(fmt.Sprintf("nfs-invalid-%d", index))
+			ds.Spec.Source = datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeNFS, URI: "nfs://server/export", Options: map[string]string{"nfsVersion": version}}
+			require.Error(t, apiClient.Create(ctx, ds))
+		}
+		ds := newDataset("nfs-version-wrong-type")
+		ds.Spec.Source.Options = map[string]string{"nfsVersion": "3"}
+		require.Error(t, apiClient.Create(ctx, ds))
+		ds = newDataset("nfs-version-external")
+		ds.Spec.Source = datasetv1alpha1.DatasetSource{Type: datasetv1alpha1.DatasetTypeNFS, URI: "nfs://server/export", Options: map[string]string{"nfsVersion": "3"}}
+		ds.Spec.VolumeClaimRef = &datasetv1alpha1.VolumeClaimRef{Name: "external"}
+		require.Error(t, apiClient.Create(ctx, ds))
+	})
+
 }
