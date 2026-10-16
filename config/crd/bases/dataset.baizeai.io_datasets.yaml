@@ -297,10 +297,13 @@ spec:
                       options is a map of key-value pairs that can be used to specify additional options for the dataset source, e.g. {"branch": "master"}
                       supported keys for each type of dataset source are:
                       - GIT: branch, commit, depth, submodules
-                      - S3: region, endpoint, provider, syncMode
+                      - S3: region, endpoint, provider, syncMode, tlsMode, tlsCASecretName
+                        tlsMode: system (default), customCA, insecureSkipVerify.
+                        customCA requires a same-namespace Secret reference (tlsCASecretName), key ca.crt.
+                        CA PEM and the internal loader path tlsCAFile must not be stored in options.
                       - HTTP: any key-value pair will be passed to the underlying http client as http headers
                       - PVC:
-                      - NFS:
+                      - NFS: nfsVersion: 3, 4.0, 4.1 or 4.2. Omit to use the controller default. Immutable after creation.
                       - CONDA: requirements.txt, environment.yaml
                       - REFERENCE:
                       - HUGGING_FACE: repo, repoType, endpoint, include, exclude, revision
@@ -353,6 +356,17 @@ spec:
                 - type
                 - uri
                 type: object
+                x-kubernetes-validations:
+                - message: nfsVersion must be 3, 4.0, 4.1 or 4.2 and is only supported
+                    for NFS datasets
+                  rule: '!has(self.options) || !(''nfsVersion'' in self.options) ||
+                    (self.type == ''NFS'' && self.options[''nfsVersion''] in [''3'',
+                    ''4.0'', ''4.1'', ''4.2''])'
+                - message: nfsVersion cannot be added, changed or removed after creation
+                  rule: '(has(self.options) && (''nfsVersion'' in self.options)) ?
+                    (has(oldSelf.options) && (''nfsVersion'' in oldSelf.options) &&
+                    self.options[''nfsVersion''] == oldSelf.options[''nfsVersion''])
+                    : !(has(oldSelf.options) && (''nfsVersion'' in oldSelf.options))'
               volumeClaimRef:
                 description: volumeClaimRef is the reference to an existing PVC.
                 properties:
@@ -796,6 +810,9 @@ spec:
                 when volumeClaimRef is not set
               rule: has(self.volumeClaimRef) || self.source.type != 'PVC' || (self.source.uri.matches('^pvc://[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?([.][a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*(/[^?#]*)?$')
                 && size(self.source.uri.split('/')[2]) <= 253)
+            - message: nfsVersion cannot be set when volumeClaimRef is used
+              rule: '!has(self.volumeClaimRef) || !has(self.source.options) || !(''nfsVersion''
+                in self.source.options)'
           status:
             description: DatasetStatus defines the observed state of Dataset
             properties:

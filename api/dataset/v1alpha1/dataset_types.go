@@ -61,6 +61,8 @@ const (
 	AccessModeReadWrite AccessMode = "ReadWrite"
 )
 
+// +kubebuilder:validation:XValidation:rule="!has(self.options) || !('nfsVersion' in self.options) || (self.type == 'NFS' && self.options['nfsVersion'] in ['3', '4.0', '4.1', '4.2'])",message="nfsVersion must be 3, 4.0, 4.1 or 4.2 and is only supported for NFS datasets"
+// +kubebuilder:validation:XValidation:rule="(has(self.options) && ('nfsVersion' in self.options)) ? (has(oldSelf.options) && ('nfsVersion' in oldSelf.options) && self.options['nfsVersion'] == oldSelf.options['nfsVersion']) : !(has(oldSelf.options) && ('nfsVersion' in oldSelf.options))",message="nfsVersion cannot be added, changed or removed after creation"
 type DatasetSource struct {
 	// +kubebuilder:validation:Enum=GIT;S3;HTTP;PVC;NFS;CONDA;REFERENCE;HUGGING_FACE;MODEL_SCOPE;DATABASE;HADOOP;MANUAL
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
@@ -87,10 +89,13 @@ type DatasetSource struct {
 	// options is a map of key-value pairs that can be used to specify additional options for the dataset source, e.g. {"branch": "master"}
 	// supported keys for each type of dataset source are:
 	// - GIT: branch, commit, depth, submodules
-	// - S3: region, endpoint, provider, syncMode
+	// - S3: region, endpoint, provider, syncMode, tlsMode, tlsCASecretName
+	//   tlsMode: system (default), customCA, insecureSkipVerify.
+	//   customCA requires a same-namespace Secret reference (tlsCASecretName), key ca.crt.
+	//   CA PEM and the internal loader path tlsCAFile must not be stored in options.
 	// - HTTP: any key-value pair will be passed to the underlying http client as http headers
 	// - PVC:
-	// - NFS:
+	// - NFS: nfsVersion: 3, 4.0, 4.1 or 4.2. Omit to use the controller default. Immutable after creation.
 	// - CONDA: requirements.txt, environment.yaml
 	// - REFERENCE:
 	// - HUGGING_FACE: repo, repoType, endpoint, include, exclude, revision
@@ -128,6 +133,7 @@ type MountOptions struct {
 // DatasetSpec defines the desired state of Dataset
 // +kubebuilder:validation:XValidation:rule="!has(self.shareAccess) || size(self.shareAccess.rules) > 0",message="shareAccess.rules must contain at least one rule when shareAccess is configured"
 // +kubebuilder:validation:XValidation:rule="has(self.volumeClaimRef) || self.source.type != 'PVC' || (self.source.uri.matches('^pvc://[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?([.][a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*(/[^?#]*)?$') && size(self.source.uri.split('/')[2]) <= 253)",message="PVC dataset source URI must be pvc://<valid-pvc-name>[/<path>] when volumeClaimRef is not set"
+// +kubebuilder:validation:XValidation:rule="!has(self.volumeClaimRef) || !has(self.source.options) || !('nfsVersion' in self.source.options)",message="nfsVersion cannot be set when volumeClaimRef is used"
 type DatasetSpec struct {
 	// Share indicates whether the model is shareable with others.
 	// When set to true, the model can be shared according to the specified selector.

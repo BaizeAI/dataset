@@ -27,6 +27,7 @@ import (
 
 	"github.com/BaizeAI/dataset/pkg/kubeutils"
 	"github.com/BaizeAI/dataset/pkg/mountpolicy"
+	"github.com/BaizeAI/dataset/pkg/nfsconfig"
 
 	"github.com/samber/lo"
 	batchv1 "k8s.io/api/batch/v1"
@@ -458,10 +459,21 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 		if err != nil {
 			return err
 		}
-		pvTemp.Spec.MountOptions = []string{fmt.Sprintf("nfsvers=%s", config.GetDatasetNFSVersion())}
+		version, err := nfsconfig.Resolve(ds.Spec.Source.Options, config.GetDatasetNFSVersion())
+		if err != nil {
+			return err
+		}
+		pvTemp.Spec.MountOptions = []string{fmt.Sprintf("nfsvers=%s", version)}
 		u, err := url.Parse(ds.Spec.Source.URI)
 		if err != nil {
 			return err
+		}
+		server, port, err := nfsServerAndPort(u)
+		if err != nil {
+			return err
+		}
+		if port != "" {
+			pvTemp.Spec.MountOptions = append(pvTemp.Spec.MountOptions, "port="+port)
 		}
 		forceStorageClass = pvTemp.Spec.StorageClassName
 
@@ -488,7 +500,7 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 			if pvTemp.Spec.CSI.VolumeAttributes == nil {
 				pvTemp.Spec.CSI.VolumeAttributes = make(map[string]string)
 			}
-			pvTemp.Spec.CSI.VolumeAttributes["server"] = u.Host
+			pvTemp.Spec.CSI.VolumeAttributes["server"] = server
 			pvTemp.Spec.CSI.VolumeAttributes["share"] = "/"
 			pvTemp.Spec.CSI.VolumeAttributes["subdir"] = u.Path
 			pvTemp.Spec.CSI.VolumeAttributes["onDelete"] = "retain"
@@ -500,6 +512,8 @@ func (r *DatasetReconciler) reconcilePVC(ctx context.Context, ds *datasetv1alpha
 			if pvTemp.Spec.CSI.VolumeAttributes["mountPermissions"] == "" {
 				pvTemp.Spec.CSI.VolumeAttributes["mountPermissions"] = ds.Spec.MountOptions.Mode
 			}
+			// Preserve the existing volume identity, including the URI port.
+			// The mount server and NFS port are supplied separately above.
 			pvTemp.Spec.CSI.VolumeHandle = fmt.Sprintf("%s#%s#%s#", u.Host, u.Path, pvName)
 
 			if err := r.Create(ctx, &pvTemp); err != nil {
@@ -747,6 +761,11 @@ func (r *DatasetReconciler) reconcileJob(ctx context.Context, ds *datasetv1alpha
 		}
 
 		podSpec := &jobSpec.Template.Spec
+		if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeS3 {
+			if err := configureS3TLS(options, podSpec, container); err != nil {
+				return err
+			}
+		}
 
 		// conda 类型需要将 ConfigMap mount 到容器
 		condaKeyItems := make([]corev1.KeyToPath, 0, 2)
@@ -1166,6 +1185,12 @@ func (r *DatasetReconciler) getSourceDataset(ctx context.Context, ds *datasetv1a
 }
 
 func (r *DatasetReconciler) validate(ctx context.Context, ds *datasetv1alpha1.Dataset) error {
+	if err := nfsconfig.ValidateOptions(string(ds.Spec.Source.Type), ds.Spec.Source.Options); err != nil {
+		return err
+	}
+	if _, present := ds.Spec.Source.Options[nfsconfig.VersionKey]; present && ds.Spec.VolumeClaimRef != nil {
+		return fmt.Errorf("nfsVersion cannot be set when volumeClaimRef is used")
+	}
 	if ds.Spec.Source.Type == datasetv1alpha1.DatasetTypeManual && ds.Spec.Source.URI != "manual://" {
 		return fmt.Errorf("MANUAL dataset source URI must be manual://")
 	}

@@ -42,6 +42,12 @@ enable_cascading_deletion: true
 
 For `NFS` datasets, the controller sets the NFS mount option `nfsvers` when it creates a PersistentVolume. The supported versions are `3`, `4.0`, `4.1`, and `4.2`; the default is `4.1`.
 
+An explicit port in the NFS URI (for example, `nfs://server:20490/export`)
+sets only the NFS service port. NFSv3 still requires rpcbind, mountd, and
+other auxiliary services to be correctly configured and reachable. The URI
+does not support specifying their ports separately. When only a single
+custom port is exposed, NFSv4 (4.0, 4.1, or 4.2) is recommended.
+
 Set the version in the controller configuration file:
 
 ```yaml
@@ -54,3 +60,16 @@ The `DATASET_NFS_VERSION` environment variable takes precedence over the configu
 config:
   dataset_nfs_version: "4.0"
 ```
+
+Set a version for an individual NFS dataset to override the controller default:
+
+```yaml
+spec:
+  source:
+    type: NFS
+    uri: nfs://server/export
+    options:
+      nfsVersion: "3"
+```
+
+Omit `nfsVersion` to use the controller default. An explicit version cannot be added, changed, or removed after creation. Changing the controller default does not update existing PVs. External PVCs (`volumeClaimRef`) use their existing PV options and cannot specify `nfsVersion`. Reference datasets inherit their source PV mount options.

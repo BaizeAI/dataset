@@ -3,6 +3,7 @@ kind: Deployment
 metadata:
   name: {{ include "dataset.fullname" . }}
   labels:
+    dataset.baizeai.io/controller: "true"
     {{- include "dataset.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
